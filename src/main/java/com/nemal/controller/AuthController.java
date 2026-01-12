@@ -1,16 +1,20 @@
 package com.nemal.controller;
 
+import com.nemal.dto.LoginDto;
+import com.nemal.dto.LoginResponse;
 import com.nemal.dto.UserRegistrationDto;
 import com.nemal.service.UserService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/auth")
+@CrossOrigin(origins = "http://localhost:5173")
 public class AuthController {
 
     private final UserService userService;
@@ -20,12 +24,22 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public ResponseEntity<String> register(@Valid @RequestBody UserRegistrationDto dto) {
+    public ResponseEntity<LoginResponse> register(@Valid @RequestBody UserRegistrationDto dto) {
         return ResponseEntity.ok(userService.register(dto));
     }
 
     @PostMapping("/login")
-    public ResponseEntity<String> login(@Valid @RequestBody UserRegistrationDto dto) {
+    public ResponseEntity<LoginResponse> login(@Valid @RequestBody LoginDto dto) {
         return ResponseEntity.ok(userService.authenticate(dto));
+    }
+
+    @GetMapping("/verify")
+    public ResponseEntity<?> verifyToken() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return ResponseEntity.ok(Map.of(
+                "authenticated", true,
+                "username", auth.getName(),
+                "authorities", auth.getAuthorities()
+        ));
     }
 }

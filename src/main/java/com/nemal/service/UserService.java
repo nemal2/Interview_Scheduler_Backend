@@ -1,5 +1,7 @@
 package com.nemal.service;
 
+import com.nemal.dto.LoginDto;
+import com.nemal.dto.LoginResponse;
 import com.nemal.dto.ProfileUpdateDto;
 import com.nemal.dto.UserDto;
 import com.nemal.dto.UserRegistrationDto;
@@ -29,7 +31,9 @@ public class UserService implements UserDetailsService {
     private final JwtService jwtService;
     private final AuthenticationManager authenticationManager;
 
-    public UserService(UserRepository userRepository, DepartmentRepository departmentRepository, DesignationRepository designationRepository, PasswordEncoder passwordEncoder, JwtService jwtService, AuthenticationManager authenticationManager) {
+    public UserService(UserRepository userRepository, DepartmentRepository departmentRepository,
+                       DesignationRepository designationRepository, PasswordEncoder passwordEncoder,
+                       JwtService jwtService, AuthenticationManager authenticationManager) {
         this.userRepository = userRepository;
         this.departmentRepository = departmentRepository;
         this.designationRepository = designationRepository;
@@ -38,7 +42,7 @@ public class UserService implements UserDetailsService {
         this.authenticationManager = authenticationManager;
     }
 
-    public String register(UserRegistrationDto dto) {
+    public LoginResponse register(UserRegistrationDto dto) {
         User user = User.builder()
                 .email(dto.email())
                 .passwordHash(passwordEncoder.encode(dto.password()))
@@ -47,13 +51,17 @@ public class UserService implements UserDetailsService {
                 .role(dto.role())
                 .build();
         userRepository.save(user);
-        return jwtService.generateToken((UserDetails) user);
+        String token = jwtService.generateToken((UserDetails) user);
+        return LoginResponse.from(token, user);
     }
 
-    public String authenticate(UserRegistrationDto dto) {
-        authenticationManager.authenticate(new UsernamePasswordAuthenticationToken(dto.email(), dto.password()));
+    public LoginResponse authenticate(LoginDto dto) {
+        authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(dto.email(), dto.password())
+        );
         User user = userRepository.findByEmail(dto.email()).orElseThrow();
-        return jwtService.generateToken((UserDetails) user);
+        String token = jwtService.generateToken((UserDetails) user);
+        return LoginResponse.from(token, user);
     }
 
     public UserDto createUser(UserDto dto, Role role) {
@@ -73,14 +81,23 @@ public class UserService implements UserDetailsService {
         userRepository.save(user);
     }
 
-    //update profile
-
-
-
+    public User updateProfile(User user, ProfileUpdateDto dto) {
+        user.setPhone(dto.phone());
+        user.setProfilePictureUrl(dto.profilePictureUrl());
+        if (dto.departmentId() != null) {
+            Department dept = departmentRepository.findById(dto.departmentId()).orElseThrow();
+            user.setDepartment(dept);
+        }
+        if (dto.designationId() != null) {
+            Designation des = designationRepository.findById(dto.designationId()).orElseThrow();
+            user.setCurrentDesignation(des);
+        }
+        return userRepository.save(user);
+    }
 
     @Override
     public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
-        return (UserDetails) userRepository.findByEmail(username)
+        return userRepository.findByEmail(username)
                 .orElseThrow(() -> new UsernameNotFoundException("User not found"));
     }
 }
