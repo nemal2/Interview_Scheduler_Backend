@@ -4,4 +4,5 @@ import com.nemal.entity.Technology;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface TechnologyRepository extends JpaRepository<Technology, Long> {
+    Technology findByNameIgnoreCase(String name);
 }

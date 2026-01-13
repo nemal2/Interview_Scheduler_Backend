@@ -37,6 +37,11 @@ public class User implements UserDetails {
     private String phone;
     private String profilePictureUrl;
 
+    @Column(length = 1000)
+    private String bio;
+
+    private Integer yearsOfExperience;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private Role role;
@@ -58,7 +63,6 @@ public class User implements UserDetails {
     public String getFullName() {
         return firstName + " " + lastName;
     }
-
 
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {
@@ -95,11 +99,11 @@ public class User implements UserDetails {
         return isActive;
     }
 
-
     public void setIsActive(boolean b) {
         this.isActive = b;
     }
 
+    // Getters and Setters
     public Long getId() {
         return id;
     }
@@ -154,6 +158,22 @@ public class User implements UserDetails {
 
     public void setProfilePictureUrl(String profilePictureUrl) {
         this.profilePictureUrl = profilePictureUrl;
+    }
+
+    public String getBio() {
+        return bio;
+    }
+
+    public void setBio(String bio) {
+        this.bio = bio;
+    }
+
+    public Integer getYearsOfExperience() {
+        return yearsOfExperience;
+    }
+
+    public void setYearsOfExperience(Integer yearsOfExperience) {
+        this.yearsOfExperience = yearsOfExperience;
     }
 
     public Role getRole() {
