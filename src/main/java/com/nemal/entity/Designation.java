@@ -17,7 +17,15 @@ public class Designation {
     @Column(nullable = false)
     private String name;
 
-    private int hierarchyLevel;
+    @Column(name = "hierarchy_level", nullable = false)
+    private Integer hierarchyLevel;
 
+    @ManyToOne
+    @JoinColumn(name = "department_id")
+    private Department department;
+
+    @Column(name = "is_active")
     private boolean isActive = true;
+
+    private String description;
 }

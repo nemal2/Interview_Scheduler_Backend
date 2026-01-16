@@ -33,15 +33,9 @@ public class ProfileController {
         return ResponseEntity.ok(profileService.updateProfile(user, updateDto));
     }
 
-    @GetMapping("/technologies")
-    public ResponseEntity<List<TechnologyDto>> getAllTechnologies() {
-        return ResponseEntity.ok(profileService.getAllTechnologies());
-    }
-
-    @PostMapping("/technologies")
-    public ResponseEntity<TechnologyDto> createTechnology(@RequestBody CreateTechnologyDto dto) {
-        return ResponseEntity.ok(profileService.createTechnology(dto));
-    }
+    // REMOVED: Technology endpoints - now in TechnologyController
+    // @GetMapping("/technologies")
+    // @PostMapping("/technologies")
 
     @GetMapping("/profile/interviewer-technologies")
     public ResponseEntity<List<InterviewerTechnologyDto>> getInterviewerTechnologies(
@@ -72,8 +66,5 @@ public class ProfileController {
         return ResponseEntity.ok(profileService.getAllDepartments());
     }
 
-    @GetMapping("/designations")
-    public ResponseEntity<List<DesignationDto>> getAllDesignations() {
-        return ResponseEntity.ok(profileService.getAllDesignations());
-    }
+    // Note: Designations are now in DesignationController at /api/designations
 }

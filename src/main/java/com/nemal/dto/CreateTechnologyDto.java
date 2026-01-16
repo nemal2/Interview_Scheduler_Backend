@@ -1,3 +1,6 @@
 package com.nemal.dto;
 
-public record CreateTechnologyDto(String name, String category) {}
+public record CreateTechnologyDto(
+        String name,
+        String category
+) {}
