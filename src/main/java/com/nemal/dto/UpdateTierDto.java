@@ -1,9 +1,8 @@
 package com.nemal.dto;
 
-public record UpdateDesignationDto(
+public record UpdateTierDto(
         String name,
-        Integer levelOrder,
-        Long tierId,
+        Integer tierOrder,
         String description,
         Boolean isActive
 ) {}

@@ -37,6 +37,12 @@ public class DesignationController {
         return ResponseEntity.ok(designationService.getDesignationsByDepartment(departmentId));
     }
 
+    @GetMapping("/tier/{tierId}")
+    public ResponseEntity<List<DesignationDto>> getDesignationsByTier(
+            @PathVariable Long tierId) {
+        return ResponseEntity.ok(designationService.getDesignationsByTier(tierId));
+    }
+
     @PostMapping
     public ResponseEntity<DesignationDto> createDesignation(
             @RequestBody CreateDesignationDto dto) {

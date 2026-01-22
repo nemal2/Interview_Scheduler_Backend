@@ -2,14 +2,15 @@ package com.nemal.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "designations")
+@Table(name = "tiers")
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class Designation {
+public class Tier {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -17,19 +18,23 @@ public class Designation {
     @Column(nullable = false)
     private String name;
 
-    @Column(name = "level_order", nullable = false)
-    private Integer levelOrder;
-
     @ManyToOne
     @JoinColumn(name = "department_id")
     private Department department;
 
-    @ManyToOne
-    @JoinColumn(name = "tier_id")
-    private Tier tier;
+    @Column(name = "tier_order", nullable = false)
+    private Integer tierOrder;
+
+    private String description;
 
     @Column(name = "is_active")
     private boolean isActive = true;
 
-    private String description;
+    @Column(name = "created_at")
+    private LocalDateTime createdAt;
+
+    @PrePersist
+    protected void onCreate() {
+        createdAt = LocalDateTime.now();
+    }
 }

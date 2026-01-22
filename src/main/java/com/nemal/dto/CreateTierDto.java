@@ -1,9 +1,8 @@
 package com.nemal.dto;
 
-public record CreateDesignationDto(
+public record CreateTierDto(
         String name,
-        Integer levelOrder,
         Long departmentId,
-        Long tierId,
+        Integer tierOrder,
         String description
 ) {}
