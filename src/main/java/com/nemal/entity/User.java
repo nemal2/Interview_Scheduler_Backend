@@ -12,7 +12,9 @@ import org.springframework.security.core.userdetails.UserDetails;
 
 import java.time.LocalDateTime;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 @Entity
 @Table(name = "users")
@@ -47,10 +49,16 @@ public class User implements UserDetails {
     private Role role;
 
     @ManyToOne
+    @JoinColumn(name = "department_id")
     private Department department;
 
     @ManyToOne
+    @JoinColumn(name = "current_designation_id")
     private Designation currentDesignation;
+
+    // ADD THIS - One-to-Many relationship with InterviewerTechnology
+    @OneToMany(mappedBy = "interviewer", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    private Set<InterviewerTechnology> interviewerTechnologies = new HashSet<>();
 
     private boolean isActive = true;
 
@@ -103,7 +111,7 @@ public class User implements UserDetails {
         this.isActive = b;
     }
 
-    // Getters and Setters
+    // ALL GETTERS AND SETTERS
     public Long getId() {
         return id;
     }
@@ -198,6 +206,18 @@ public class User implements UserDetails {
 
     public void setCurrentDesignation(Designation currentDesignation) {
         this.currentDesignation = currentDesignation;
+    }
+
+    // ADD THIS GETTER AND SETTER
+    public Set<InterviewerTechnology> getInterviewerTechnologies() {
+        if (interviewerTechnologies == null) {
+            interviewerTechnologies = new HashSet<>();
+        }
+        return interviewerTechnologies;
+    }
+
+    public void setInterviewerTechnologies(Set<InterviewerTechnology> interviewerTechnologies) {
+        this.interviewerTechnologies = interviewerTechnologies;
     }
 
     public boolean isActive() {

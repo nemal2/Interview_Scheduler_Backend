@@ -19,31 +19,59 @@ public interface AvailabilitySlotRepository extends JpaRepository<AvailabilitySl
             LocalDateTime end
     );
 
-    @Query("SELECT a FROM AvailabilitySlot a WHERE a.interviewer.id = :interviewerId " +
-            "AND a.startDateTime >= :start AND a.endDateTime <= :end " +
-            "AND a.status = :status AND a.isActive = true")
-    List<AvailabilitySlot> findAvailableSlots(
-            @Param("interviewerId") Long interviewerId,
+    @Query("SELECT DISTINCT s FROM AvailabilitySlot s " +
+            "LEFT JOIN FETCH s.interviewer i " +
+            "LEFT JOIN FETCH i.department " +
+            "LEFT JOIN FETCH i.currentDesignation " +
+            "WHERE s.status = 'AVAILABLE' " +
+            "AND s.isActive = true " +
+            "AND s.startDateTime >= :now " +
+            "ORDER BY s.startDateTime")
+    List<AvailabilitySlot> findAllAvailableSlots(@Param("now") LocalDateTime now);
+
+    @Query("SELECT DISTINCT s FROM AvailabilitySlot s " +
+            "LEFT JOIN FETCH s.interviewer i " +
+            "LEFT JOIN FETCH i.department " +
+            "LEFT JOIN FETCH i.currentDesignation " +
+            "WHERE s.status = 'AVAILABLE' " +
+            "AND s.isActive = true " +
+            "AND s.startDateTime >= :start " +
+            "AND s.endDateTime <= :end " +
+            "ORDER BY s.startDateTime")
+    List<AvailabilitySlot> findAllAvailableSlotsByDateRange(
             @Param("start") LocalDateTime start,
-            @Param("end") LocalDateTime end,
-            @Param("status") SlotStatus status
+            @Param("end") LocalDateTime end
     );
 
-    @Query("SELECT a FROM AvailabilitySlot a WHERE a.interviewer.id = :interviewerId " +
-            "AND ((a.startDateTime BETWEEN :start AND :end) OR (a.endDateTime BETWEEN :start AND :end) " +
-            "OR (a.startDateTime <= :start AND a.endDateTime >= :end)) " +
-            "AND a.isActive = true")
+    @Query("SELECT s FROM AvailabilitySlot s " +
+            "WHERE s.interviewer.id = :interviewerId " +
+            "AND s.isActive = true " +
+            "AND ((s.startDateTime BETWEEN :start AND :end) " +
+            "OR (s.endDateTime BETWEEN :start AND :end) " +
+            "OR (s.startDateTime <= :start AND s.endDateTime >= :end))")
     List<AvailabilitySlot> findConflictingSlots(
             @Param("interviewerId") Long interviewerId,
             @Param("start") LocalDateTime start,
             @Param("end") LocalDateTime end
     );
 
-    @Query("SELECT COUNT(a) FROM AvailabilitySlot a WHERE a.interviewer.id = :interviewerId " +
-            "AND a.status = 'AVAILABLE' AND a.startDateTime >= :now AND a.isActive = true")
-    long countUpcomingAvailableSlots(@Param("interviewerId") Long interviewerId, @Param("now") LocalDateTime now);
+    @Query("SELECT COUNT(s) FROM AvailabilitySlot s " +
+            "WHERE s.interviewer.id = :interviewerId " +
+            "AND s.status = 'AVAILABLE' " +
+            "AND s.startDateTime >= :now " +
+            "AND s.isActive = true")
+    long countUpcomingAvailableSlots(
+            @Param("interviewerId") Long interviewerId,
+            @Param("now") LocalDateTime now
+    );
 
-    @Query("SELECT COUNT(a) FROM AvailabilitySlot a WHERE a.interviewer.id = :interviewerId " +
-            "AND a.status = 'BOOKED' AND a.startDateTime >= :now AND a.isActive = true")
-    long countUpcomingBookedSlots(@Param("interviewerId") Long interviewerId, @Param("now") LocalDateTime now);
+    @Query("SELECT COUNT(s) FROM AvailabilitySlot s " +
+            "WHERE s.interviewer.id = :interviewerId " +
+            "AND s.status = 'BOOKED' " +
+            "AND s.startDateTime >= :now " +
+            "AND s.isActive = true")
+    long countUpcomingBookedSlots(
+            @Param("interviewerId") Long interviewerId,
+            @Param("now") LocalDateTime now
+    );
 }
