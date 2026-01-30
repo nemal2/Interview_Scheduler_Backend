@@ -1,42 +1,49 @@
 package com.nemal.repository;
 
 import com.nemal.entity.AvailabilitySlot;
+import com.nemal.enums.SlotStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
-
-import java.time.DayOfWeek;
-import java.time.LocalDate;
-import java.time.LocalTime;
-import java.util.List;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
+import java.util.List;
 
 public interface AvailabilitySlotRepository extends JpaRepository<AvailabilitySlot, Long> {
 
-    @Query("SELECT s FROM AvailabilitySlot s WHERE s.interviewer.id = :interviewerId AND s.status = 'AVAILABLE' AND (s.specificDate = :date OR (s.isRecurring AND s.dayOfWeek = :dayOfWeek))")
-    List<AvailabilitySlot> findAvailableSlots(@Param("interviewerId") Long interviewerId,
-                                              @Param("date") LocalDate date,
-                                              @Param("dayOfWeek") DayOfWeek dayOfWeek);
+    List<AvailabilitySlot> findByInterviewerIdAndIsActiveTrue(Long interviewerId);
 
-    // FIXED: Native query for overlapping slots
-    @Query(value = """
-        SELECT * FROM availability_slots s
-        WHERE s.interviewer_id = :interviewerId
-        AND (
-            (s.specific_date = :date 
-             AND s.start_time < :endTime 
-             AND s.end_time > :startTime)
-            OR
-            (s.is_recurring = true 
-             AND s.day_of_week = :dayOfWeekStr
-             AND s.start_time < :endTime 
-             AND s.end_time > :startTime)
-        )
-        """, nativeQuery = true)
-    List<AvailabilitySlot> findOverlapping(
+    List<AvailabilitySlot> findByInterviewerIdAndStartDateTimeBetweenAndIsActiveTrue(
+            Long interviewerId,
+            LocalDateTime start,
+            LocalDateTime end
+    );
+
+    @Query("SELECT a FROM AvailabilitySlot a WHERE a.interviewer.id = :interviewerId " +
+            "AND a.startDateTime >= :start AND a.endDateTime <= :end " +
+            "AND a.status = :status AND a.isActive = true")
+    List<AvailabilitySlot> findAvailableSlots(
             @Param("interviewerId") Long interviewerId,
-            @Param("date") LocalDate date,
-            @Param("startTime") LocalTime startTime,
-            @Param("endTime") LocalTime endTime,
-            @Param("dayOfWeekStr") String dayOfWeekStr);
+            @Param("start") LocalDateTime start,
+            @Param("end") LocalDateTime end,
+            @Param("status") SlotStatus status
+    );
+
+    @Query("SELECT a FROM AvailabilitySlot a WHERE a.interviewer.id = :interviewerId " +
+            "AND ((a.startDateTime BETWEEN :start AND :end) OR (a.endDateTime BETWEEN :start AND :end) " +
+            "OR (a.startDateTime <= :start AND a.endDateTime >= :end)) " +
+            "AND a.isActive = true")
+    List<AvailabilitySlot> findConflictingSlots(
+            @Param("interviewerId") Long interviewerId,
+            @Param("start") LocalDateTime start,
+            @Param("end") LocalDateTime end
+    );
+
+    @Query("SELECT COUNT(a) FROM AvailabilitySlot a WHERE a.interviewer.id = :interviewerId " +
+            "AND a.status = 'AVAILABLE' AND a.startDateTime >= :now AND a.isActive = true")
+    long countUpcomingAvailableSlots(@Param("interviewerId") Long interviewerId, @Param("now") LocalDateTime now);
+
+    @Query("SELECT COUNT(a) FROM AvailabilitySlot a WHERE a.interviewer.id = :interviewerId " +
+            "AND a.status = 'BOOKED' AND a.startDateTime >= :now AND a.isActive = true")
+    long countUpcomingBookedSlots(@Param("interviewerId") Long interviewerId, @Param("now") LocalDateTime now);
 }

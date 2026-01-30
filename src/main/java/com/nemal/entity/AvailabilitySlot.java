@@ -4,11 +4,10 @@ import com.nemal.enums.SlotStatus;
 import jakarta.persistence.*;
 import lombok.*;
 import org.springframework.data.annotation.CreatedDate;
+import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
-import java.time.DayOfWeek;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.LocalTime;
 
 @Entity
 @Table(name = "availability_slots")
@@ -16,31 +15,46 @@ import java.time.LocalTime;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
+@EntityListeners(AuditingEntityListener.class)
 public class AvailabilitySlot {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @ManyToOne
+    @JoinColumn(name = "interviewer_id", nullable = false)
     private User interviewer;
 
-    private DayOfWeek dayOfWeek;
+    @Column(nullable = false)
+    private LocalDateTime startDateTime;
 
-    private LocalTime startTime;
-
-    private LocalTime endTime;
-
-    private LocalDate specificDate;
-
-    private boolean isRecurring;
-
-    private LocalDate validFrom;
-
-    private LocalDate validUntil;
+    @Column(nullable = false)
+    private LocalDateTime endDateTime;
 
     @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
     private SlotStatus status = SlotStatus.AVAILABLE;
+
+    private String description;
+
+    @ManyToOne
+    @JoinColumn(name = "interview_schedule_id")
+    private InterviewSchedule interviewSchedule;
+
+    @Column(nullable = false)
+    private boolean isActive = true;
 
     @CreatedDate
     private LocalDateTime createdAt;
+
+    @LastModifiedDate
+    private LocalDateTime updatedAt;
+
+    public void setActive(boolean isActive) {
+        this.isActive = isActive;
+    }
+
+    public boolean isActive() {
+        return isActive;
+    }
 }
