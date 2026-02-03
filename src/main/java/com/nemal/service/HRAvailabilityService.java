@@ -101,12 +101,15 @@ public class HRAvailabilityService {
                 slots = slots.stream()
                         .filter(slot -> {
                             try {
-                                return slot.getInterviewer() != null &&
-                                        slot.getInterviewer().getInterviewerTechnologies() != null &&
-                                        slot.getInterviewer().getInterviewerTechnologies().stream()
-                                                .anyMatch(it -> it != null &&
-                                                        it.getTechnology() != null &&
-                                                        filter.technologyIds().contains(it.getTechnology().getId()));
+                                if (slot.getInterviewer() == null ||
+                                        slot.getInterviewer().getInterviewerTechnologies() == null) {
+                                    return false;
+                                }
+
+                                return slot.getInterviewer().getInterviewerTechnologies().stream()
+                                        .filter(it -> it != null && it.isActive())
+                                        .anyMatch(it -> it.getTechnology() != null &&
+                                                filter.technologyIds().contains(it.getTechnology().getId()));
                             } catch (Exception e) {
                                 logger.warn("Error checking technologies for slot {}: {}", slot.getId(), e.getMessage());
                                 return false;
@@ -132,6 +135,67 @@ public class HRAvailabilityService {
                         })
                         .collect(Collectors.toList());
                 logger.info("After experience filter: {} slots", slots.size());
+            }
+
+            // NEW: Apply designation level filter
+            if (filter.minDesignationLevelInDepartment() != null &&
+                    filter.departmentIdForDesignationFilter() != null) {
+                logger.info("Filtering by min designation level: {} in department: {}",
+                        filter.minDesignationLevelInDepartment(), filter.departmentIdForDesignationFilter());
+                slots = slots.stream()
+                        .filter(slot -> {
+                            try {
+                                if (slot.getInterviewer() == null ||
+                                        slot.getInterviewer().getCurrentDesignation() == null) {
+                                    return false;
+                                }
+
+                                var designation = slot.getInterviewer().getCurrentDesignation();
+
+                                // Check if interviewer is in the specified department
+                                if (slot.getInterviewer().getDepartment() == null ||
+                                        !slot.getInterviewer().getDepartment().getId()
+                                                .equals(filter.departmentIdForDesignationFilter())) {
+                                    return false;
+                                }
+
+                                // Check if designation level is >= minimum
+                                return designation.getLevelOrder() != null &&
+                                        designation.getLevelOrder() >= filter.minDesignationLevelInDepartment();
+                            } catch (Exception e) {
+                                logger.warn("Error checking designation level for slot {}: {}",
+                                        slot.getId(), e.getMessage());
+                                return false;
+                            }
+                        })
+                        .collect(Collectors.toList());
+                logger.info("After designation level filter: {} slots", slots.size());
+            }
+
+            // NEW: Apply tier filter
+            if (filter.minTierId() != null) {
+                logger.info("Filtering by min tier ID: {}", filter.minTierId());
+                slots = slots.stream()
+                        .filter(slot -> {
+                            try {
+                                if (slot.getInterviewer() == null ||
+                                        slot.getInterviewer().getCurrentDesignation() == null ||
+                                        slot.getInterviewer().getCurrentDesignation().getTier() == null) {
+                                    return false;
+                                }
+
+                                var tier = slot.getInterviewer().getCurrentDesignation().getTier();
+
+                                // Check if tier order is >= minimum tier order
+                                return tier.getTierOrder() != null &&
+                                        tier.getTierOrder() >= filter.minTierId();
+                            } catch (Exception e) {
+                                logger.warn("Error checking tier for slot {}: {}", slot.getId(), e.getMessage());
+                                return false;
+                            }
+                        })
+                        .collect(Collectors.toList());
+                logger.info("After tier filter: {} slots", slots.size());
             }
 
             return slots;

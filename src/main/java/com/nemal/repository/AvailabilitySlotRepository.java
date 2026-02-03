@@ -19,20 +19,28 @@ public interface AvailabilitySlotRepository extends JpaRepository<AvailabilitySl
             LocalDateTime end
     );
 
+    // UPDATED: Added eager fetching for interviewerTechnologies and tier
     @Query("SELECT DISTINCT s FROM AvailabilitySlot s " +
             "LEFT JOIN FETCH s.interviewer i " +
             "LEFT JOIN FETCH i.department " +
-            "LEFT JOIN FETCH i.currentDesignation " +
+            "LEFT JOIN FETCH i.currentDesignation d " +
+            "LEFT JOIN FETCH d.tier " +
+            "LEFT JOIN FETCH i.interviewerTechnologies it " +
+            "LEFT JOIN FETCH it.technology " +
             "WHERE s.status = 'AVAILABLE' " +
             "AND s.isActive = true " +
             "AND s.startDateTime >= :now " +
             "ORDER BY s.startDateTime")
     List<AvailabilitySlot> findAllAvailableSlots(@Param("now") LocalDateTime now);
 
+    // UPDATED: Added eager fetching for interviewerTechnologies and tier
     @Query("SELECT DISTINCT s FROM AvailabilitySlot s " +
             "LEFT JOIN FETCH s.interviewer i " +
             "LEFT JOIN FETCH i.department " +
-            "LEFT JOIN FETCH i.currentDesignation " +
+            "LEFT JOIN FETCH i.currentDesignation d " +
+            "LEFT JOIN FETCH d.tier " +
+            "LEFT JOIN FETCH i.interviewerTechnologies it " +
+            "LEFT JOIN FETCH it.technology " +
             "WHERE s.status = 'AVAILABLE' " +
             "AND s.isActive = true " +
             "AND s.startDateTime >= :start " +

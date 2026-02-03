@@ -9,5 +9,8 @@ public record AvailabilityFilterDto(
         List<Long> technologyIds,
         LocalDateTime startDateTime,
         LocalDateTime endDateTime,
-        Integer minYearsOfExperience
+        Integer minYearsOfExperience,
+        Long minDesignationLevelInDepartment,  // NEW: Filter by minimum designation level
+        Long departmentIdForDesignationFilter, // NEW: Department for designation filtering
+        Long minTierId                         // NEW: Filter by minimum tier
 ) {}
