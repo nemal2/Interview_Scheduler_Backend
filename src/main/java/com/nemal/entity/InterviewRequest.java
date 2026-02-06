@@ -1,4 +1,4 @@
-// Update InterviewRequest.java
+// InterviewRequest.java
 package com.nemal.entity;
 
 import com.nemal.enums.RequestStatus;
@@ -26,6 +26,11 @@ public class InterviewRequest {
 
     @Column(nullable = false)
     private String candidateName;
+
+    // NEW: Reference to actual candidate if exists
+    @ManyToOne
+    @JoinColumn(name = "candidate_id")
+    private Candidate candidate;
 
     @ManyToOne
     @JoinColumn(name = "candidate_designation_id")
@@ -59,7 +64,7 @@ public class InterviewRequest {
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private RequestStatus status = RequestStatus.PENDING;
+    private RequestStatus status = RequestStatus.ACCEPTED; // Changed default to ACCEPTED
 
     @Column(nullable = false)
     private boolean isUrgent = false;

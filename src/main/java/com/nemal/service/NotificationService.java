@@ -1,4 +1,4 @@
-// NotificationService.java  
+// NotificationService.java
 package com.nemal.service;
 
 import com.nemal.entity.InterviewRequest;
@@ -6,45 +6,86 @@ import com.nemal.entity.Notification;
 import com.nemal.repository.NotificationRepository;
 import org.springframework.stereotype.Service;
 
+import java.time.format.DateTimeFormatter;
+
 @Service
 public class NotificationService {
 
     private final NotificationRepository notificationRepository;
+    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("MMM dd, yyyy 'at' h:mm a");
 
     public NotificationService(NotificationRepository notificationRepository) {
         this.notificationRepository = notificationRepository;
     }
 
-    public void sendInterviewRequestNotification(InterviewRequest request) {
+    /**
+     * Send notification when interview is scheduled (auto-accepted)
+     */
+    public void sendInterviewScheduledNotification(InterviewRequest request) {
+        String formattedDateTime = request.getPreferredStartDateTime().format(DATE_FORMATTER);
+
         Notification notification = Notification.builder()
                 .recipient(request.getAssignedInterviewer())
-                .subject("New Interview Request")
+                .subject("Interview Scheduled")
                 .message(String.format(
-                        "You have a new interview request for candidate %s. " +
-                                "Scheduled for %s. Please review and respond.",
+                        "An interview has been scheduled for you with candidate %s on %s. " +
+                                "Position: %s. Please check your schedule.",
                         request.getCandidateName(),
-                        request.getPreferredStartDateTime()
+                        formattedDateTime,
+                        request.getCandidateDesignation() != null
+                                ? request.getCandidateDesignation().getName()
+                                : "Not specified"
                 ))
-                .type("INTERVIEW_REQUEST")
-                .sent(false)
+                .type("INTERVIEW_SCHEDULED")
+                .relatedEntityId(request.getId())
+                .relatedEntityType("INTERVIEW_REQUEST")
+                .read(false)
                 .build();
 
         notificationRepository.save(notification);
     }
 
-    public void sendInterviewRequestResponseNotification(InterviewRequest request) {
-        String status = request.getStatus().toString();
+    /**
+     * Send notification when interview is cancelled
+     */
+    public void sendInterviewCancelledNotification(InterviewRequest request) {
+        String formattedDateTime = request.getPreferredStartDateTime().format(DATE_FORMATTER);
+
         Notification notification = Notification.builder()
-                .recipient(request.getRequestedBy())
-                .subject("Interview Request Response")
+                .recipient(request.getAssignedInterviewer())
+                .subject("Interview Cancelled")
                 .message(String.format(
-                        "Your interview request for candidate %s has been %s by %s.",
+                        "The interview with candidate %s scheduled for %s has been cancelled by HR.",
                         request.getCandidateName(),
-                        status.toLowerCase(),
-                        request.getAssignedInterviewer().getFullName()
+                        formattedDateTime
                 ))
-                .type("INTERVIEW_REQUEST_RESPONSE")
-                .sent(false)
+                .type("INTERVIEW_CANCELLED")
+                .relatedEntityId(request.getId())
+                .relatedEntityType("INTERVIEW_REQUEST")
+                .read(false)
+                .build();
+
+        notificationRepository.save(notification);
+    }
+
+    /**
+     * Send reminder notification for upcoming interview
+     */
+    public void sendInterviewReminderNotification(InterviewRequest request) {
+        String formattedDateTime = request.getPreferredStartDateTime().format(DATE_FORMATTER);
+
+        Notification notification = Notification.builder()
+                .recipient(request.getAssignedInterviewer())
+                .subject("Interview Reminder")
+                .message(String.format(
+                        "Reminder: You have an interview with %s scheduled for %s.",
+                        request.getCandidateName(),
+                        formattedDateTime
+                ))
+                .type("INTERVIEW_REMINDER")
+                .relatedEntityId(request.getId())
+                .relatedEntityType("INTERVIEW_REQUEST")
+                .read(false)
                 .build();
 
         notificationRepository.save(notification);

@@ -5,6 +5,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 public record CreateInterviewRequestDto(
+        Long candidateId, // NEW: Link to existing candidate
         String candidateName,
         Long candidateDesignationId,
         List<Long> requiredTechnologyIds,

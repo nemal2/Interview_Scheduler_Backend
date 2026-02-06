@@ -3,6 +3,7 @@ package com.nemal.service;
 import com.nemal.dto.AvailabilityFilterDto;
 import com.nemal.dto.InterviewerAvailabilityDto;
 import com.nemal.entity.AvailabilitySlot;
+import com.nemal.entity.InterviewerTechnology;
 import com.nemal.repository.AvailabilitySlotRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -83,9 +84,23 @@ public class HRAvailabilityService {
                 slots = slots.stream()
                         .filter(slot -> {
                             try {
-                                return slot.getInterviewer() != null &&
-                                        slot.getInterviewer().getDepartment() != null &&
-                                        filter.departmentIds().contains(slot.getInterviewer().getDepartment().getId());
+                                if (slot.getInterviewer() == null) {
+                                    logger.warn("Slot {} has null interviewer", slot.getId());
+                                    return false;
+                                }
+                                if (slot.getInterviewer().getDepartment() == null) {
+                                    logger.warn("Interviewer {} has null department", slot.getInterviewer().getId());
+                                    return false;
+                                }
+                                boolean matches = filter.departmentIds().contains(
+                                        slot.getInterviewer().getDepartment().getId());
+                                if (!matches) {
+                                    logger.debug("Slot {} filtered out - department {} not in filter {}",
+                                            slot.getId(),
+                                            slot.getInterviewer().getDepartment().getId(),
+                                            filter.departmentIds());
+                                }
+                                return matches;
                             } catch (Exception e) {
                                 logger.warn("Error checking department for slot {}: {}", slot.getId(), e.getMessage());
                                 return false;
@@ -101,15 +116,24 @@ public class HRAvailabilityService {
                 slots = slots.stream()
                         .filter(slot -> {
                             try {
-                                if (slot.getInterviewer() == null ||
-                                        slot.getInterviewer().getInterviewerTechnologies() == null) {
+                                if (slot.getInterviewer() == null) {
                                     return false;
                                 }
 
-                                return slot.getInterviewer().getInterviewerTechnologies().stream()
-                                        .filter(it -> it != null && it.isActive())
-                                        .anyMatch(it -> it.getTechnology() != null &&
-                                                filter.technologyIds().contains(it.getTechnology().getId()));
+                                var interviewerTechs = slot.getInterviewer().getInterviewerTechnologies();
+                                if (interviewerTechs == null || interviewerTechs.isEmpty()) {
+                                    logger.debug("Interviewer {} has no technologies", slot.getInterviewer().getId());
+                                    return false;
+                                }
+
+                                boolean hasMatchingTech = interviewerTechs.stream()
+                                        .filter(it -> it != null && it.isActive() && it.getTechnology() != null)
+                                        .anyMatch(it -> filter.technologyIds().contains(it.getTechnology().getId()));
+
+                                if (!hasMatchingTech) {
+                                    logger.debug("Slot {} filtered out - no matching technology", slot.getId());
+                                }
+                                return hasMatchingTech;
                             } catch (Exception e) {
                                 logger.warn("Error checking technologies for slot {}: {}", slot.getId(), e.getMessage());
                                 return false;
@@ -125,9 +149,20 @@ public class HRAvailabilityService {
                 slots = slots.stream()
                         .filter(slot -> {
                             try {
-                                return slot.getInterviewer() != null &&
-                                        slot.getInterviewer().getYearsOfExperience() != null &&
-                                        slot.getInterviewer().getYearsOfExperience() >= filter.minYearsOfExperience();
+                                if (slot.getInterviewer() == null) {
+                                    return false;
+                                }
+                                Integer years = slot.getInterviewer().getYearsOfExperience();
+                                if (years == null) {
+                                    logger.debug("Interviewer {} has null years of experience", slot.getInterviewer().getId());
+                                    return false;
+                                }
+                                boolean matches = years >= filter.minYearsOfExperience();
+                                if (!matches) {
+                                    logger.debug("Slot {} filtered out - experience {} < required {}",
+                                            slot.getId(), years, filter.minYearsOfExperience());
+                                }
+                                return matches;
                             } catch (Exception e) {
                                 logger.warn("Error checking experience for slot {}: {}", slot.getId(), e.getMessage());
                                 return false;
@@ -137,7 +172,7 @@ public class HRAvailabilityService {
                 logger.info("After experience filter: {} slots", slots.size());
             }
 
-            // NEW: Apply designation level filter
+            // Apply designation level filter
             if (filter.minDesignationLevelInDepartment() != null &&
                     filter.departmentIdForDesignationFilter() != null) {
                 logger.info("Filtering by min designation level: {} in department: {}",
@@ -147,6 +182,7 @@ public class HRAvailabilityService {
                             try {
                                 if (slot.getInterviewer() == null ||
                                         slot.getInterviewer().getCurrentDesignation() == null) {
+                                    logger.debug("Slot {} has no designation", slot.getId());
                                     return false;
                                 }
 
@@ -156,12 +192,22 @@ public class HRAvailabilityService {
                                 if (slot.getInterviewer().getDepartment() == null ||
                                         !slot.getInterviewer().getDepartment().getId()
                                                 .equals(filter.departmentIdForDesignationFilter())) {
+                                    logger.debug("Slot {} filtered out - wrong department", slot.getId());
                                     return false;
                                 }
 
                                 // Check if designation level is >= minimum
-                                return designation.getLevelOrder() != null &&
-                                        designation.getLevelOrder() >= filter.minDesignationLevelInDepartment();
+                                if (designation.getLevelOrder() == null) {
+                                    logger.debug("Designation {} has null level order", designation.getId());
+                                    return false;
+                                }
+
+                                boolean matches = designation.getLevelOrder() >= filter.minDesignationLevelInDepartment();
+                                if (!matches) {
+                                    logger.debug("Slot {} filtered out - level {} < required {}",
+                                            slot.getId(), designation.getLevelOrder(), filter.minDesignationLevelInDepartment());
+                                }
+                                return matches;
                             } catch (Exception e) {
                                 logger.warn("Error checking designation level for slot {}: {}",
                                         slot.getId(), e.getMessage());
@@ -172,23 +218,33 @@ public class HRAvailabilityService {
                 logger.info("After designation level filter: {} slots", slots.size());
             }
 
-            // NEW: Apply tier filter
+            // Apply tier filter
             if (filter.minTierId() != null) {
-                logger.info("Filtering by min tier ID: {}", filter.minTierId());
+                logger.info("Filtering by min tier order: {}", filter.minTierId());
                 slots = slots.stream()
                         .filter(slot -> {
                             try {
                                 if (slot.getInterviewer() == null ||
                                         slot.getInterviewer().getCurrentDesignation() == null ||
                                         slot.getInterviewer().getCurrentDesignation().getTier() == null) {
+                                    logger.debug("Slot {} has no tier", slot.getId());
                                     return false;
                                 }
 
                                 var tier = slot.getInterviewer().getCurrentDesignation().getTier();
 
                                 // Check if tier order is >= minimum tier order
-                                return tier.getTierOrder() != null &&
-                                        tier.getTierOrder() >= filter.minTierId();
+                                if (tier.getTierOrder() == null) {
+                                    logger.debug("Tier {} has null tier order", tier.getId());
+                                    return false;
+                                }
+
+                                boolean matches = tier.getTierOrder() >= filter.minTierId();
+                                if (!matches) {
+                                    logger.debug("Slot {} filtered out - tier {} < required {}",
+                                            slot.getId(), tier.getTierOrder(), filter.minTierId());
+                                }
+                                return matches;
                             } catch (Exception e) {
                                 logger.warn("Error checking tier for slot {}: {}", slot.getId(), e.getMessage());
                                 return false;

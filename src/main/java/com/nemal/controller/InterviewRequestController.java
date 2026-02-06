@@ -3,7 +3,6 @@ package com.nemal.controller;
 
 import com.nemal.dto.CreateInterviewRequestDto;
 import com.nemal.dto.InterviewRequestDto;
-import com.nemal.dto.RespondToInterviewRequestDto;
 import com.nemal.entity.User;
 import com.nemal.service.InterviewRequestService;
 import org.springframework.http.HttpStatus;
@@ -25,6 +24,9 @@ public class InterviewRequestController {
         this.interviewRequestService = interviewRequestService;
     }
 
+    /**
+     * Create interview request (auto-accepted)
+     */
     @PostMapping
     public ResponseEntity<InterviewRequestDto> createInterviewRequest(
             @AuthenticationPrincipal User user,
@@ -34,35 +36,57 @@ public class InterviewRequestController {
                 .body(interviewRequestService.createInterviewRequest(user, dto));
     }
 
-    @GetMapping("/my-requests")
-    public ResponseEntity<List<InterviewRequestDto>> getMyRequests(
+    /**
+     * Get interviewer's scheduled interviews
+     */
+    @GetMapping("/my-interviews")
+    public ResponseEntity<List<InterviewRequestDto>> getMyInterviews(
             @AuthenticationPrincipal User user
     ) {
         return ResponseEntity.ok(interviewRequestService.getMyRequests(user));
     }
 
-    @GetMapping("/pending")
-    public ResponseEntity<List<InterviewRequestDto>> getMyPendingRequests(
+    /**
+     * Get upcoming interviews for interviewer
+     */
+    @GetMapping("/upcoming")
+    public ResponseEntity<List<InterviewRequestDto>> getUpcomingInterviews(
             @AuthenticationPrincipal User user
     ) {
-        return ResponseEntity.ok(interviewRequestService.getMyPendingRequests(user));
+        return ResponseEntity.ok(interviewRequestService.getUpcomingInterviews(user));
     }
 
-    @PostMapping("/{requestId}/respond")
-    public ResponseEntity<InterviewRequestDto> respondToRequest(
-            @AuthenticationPrincipal User user,
-            @PathVariable Long requestId,
-            @RequestBody RespondToInterviewRequestDto dto
+    /**
+     * Get HR's created interview requests
+     */
+    @GetMapping("/hr-requests")
+    public ResponseEntity<List<InterviewRequestDto>> getHRRequests(
+            @AuthenticationPrincipal User user
     ) {
-        return ResponseEntity.ok(interviewRequestService.respondToInterviewRequest(user, requestId, dto));
+        return ResponseEntity.ok(interviewRequestService.getHRRequests(user));
     }
 
+    /**
+     * Cancel interview request (HR only)
+     */
+    @DeleteMapping("/{requestId}/cancel")
+    public ResponseEntity<Void> cancelRequest(
+            @AuthenticationPrincipal User user,
+            @PathVariable Long requestId
+    ) {
+        interviewRequestService.cancelInterviewRequest(user, requestId);
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Get interview statistics for interviewer
+     */
     @GetMapping("/stats")
     public ResponseEntity<Map<String, Long>> getRequestStats(
             @AuthenticationPrincipal User user
     ) {
         return ResponseEntity.ok(Map.of(
-                "pendingRequests", interviewRequestService.getPendingRequestCount(user)
+                "upcomingInterviews", interviewRequestService.getUpcomingInterviewCount(user)
         ));
     }
 }

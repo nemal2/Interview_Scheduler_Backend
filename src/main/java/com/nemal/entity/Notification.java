@@ -1,7 +1,10 @@
+// Notification.java
 package com.nemal.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.springframework.data.annotation.CreatedDate;
+import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.LocalDateTime;
 
@@ -11,29 +14,37 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
+@EntityListeners(AuditingEntityListener.class)
 public class Notification {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @ManyToOne
+    @JoinColumn(name = "recipient_id", nullable = false)
     private User recipient;
 
+    @Column(nullable = false)
     private String subject;
 
+    @Column(length = 2000, nullable = false)
     private String message;
 
-    private String type;
+    @Column(nullable = false)
+    private String type; // INTERVIEW_SCHEDULED, INTERVIEW_CANCELLED, INTERVIEW_REMINDER, etc.
 
-    private boolean sent = false;
+    @Column(name = "related_entity_id")
+    private Long relatedEntityId;
 
-    private LocalDateTime sentAt;
+    @Column(name = "related_entity_type")
+    private String relatedEntityType; // INTERVIEW_REQUEST, AVAILABILITY_SLOT, etc.
 
-    private LocalDateTime createdAt = LocalDateTime.now();
+    @Column(nullable = false)
+    private boolean read = false;
 
-    private boolean isRead = false;
+    @CreatedDate
+    @Column(nullable = false, updatable = false)
+    private LocalDateTime createdAt;
 
-    public void setIsRead(boolean b) {
-
-    }
+    private LocalDateTime readAt;
 }
