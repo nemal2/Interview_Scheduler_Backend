@@ -16,17 +16,23 @@ public class ProfileService {
     private final TechnologyRepository technologyRepository;
     private final InterviewerTechnologyRepository interviewerTechnologyRepository;
     private final DepartmentRepository departmentRepository;
+    private final DesignationRepository designationRepository;
+    private final TierRepository tierRepository;
 
     public ProfileService(
             UserRepository userRepository,
             TechnologyRepository technologyRepository,
             InterviewerTechnologyRepository interviewerTechnologyRepository,
-            DepartmentRepository departmentRepository
+            DepartmentRepository departmentRepository,
+            DesignationRepository designationRepository,
+            TierRepository tierRepository
     ) {
         this.userRepository = userRepository;
         this.technologyRepository = technologyRepository;
         this.interviewerTechnologyRepository = interviewerTechnologyRepository;
         this.departmentRepository = departmentRepository;
+        this.designationRepository = designationRepository;
+        this.tierRepository = tierRepository;
     }
 
     public ProfileDto getProfile(User user) {
@@ -52,13 +58,37 @@ public class ProfileService {
         if (updateDto.profilePictureUrl() != null) {
             existingUser.setProfilePictureUrl(updateDto.profilePictureUrl());
         }
+        if (updateDto.bio() != null) {
+            existingUser.setBio(updateDto.bio());
+        }
+        if (updateDto.yearsOfExperience() != null) {
+            existingUser.setYearsOfExperience(updateDto.yearsOfExperience());
+        }
+
+        // Update department
+        if (updateDto.departmentId() != null) {
+            Department department = departmentRepository.findById(updateDto.departmentId())
+                    .orElseThrow(() -> new RuntimeException("Department not found"));
+            existingUser.setDepartment(department);
+        }
+
+        // Update designation (which includes tier information)
+        if (updateDto.designationId() != null) {
+            Designation designation = designationRepository.findById(updateDto.designationId())
+                    .orElseThrow(() -> new RuntimeException("Designation not found"));
+
+            // Validate that designation belongs to the user's department
+            if (existingUser.getDepartment() != null &&
+                    !designation.getDepartment().getId().equals(existingUser.getDepartment().getId())) {
+                throw new RuntimeException("Designation must belong to your department");
+            }
+
+            existingUser.setCurrentDesignation(designation);
+        }
 
         existingUser = userRepository.save(existingUser);
         return ProfileDto.from(existingUser);
     }
-
-    // Technology methods removed - now in TechnologyService
-    // getAllTechnologies() and createTechnology() moved to TechnologyService
 
     public List<InterviewerTechnologyDto> getInterviewerTechnologies(Long userId) {
         return interviewerTechnologyRepository.findByInterviewerId(userId).stream()
@@ -70,6 +100,16 @@ public class ProfileService {
     public InterviewerTechnologyDto addInterviewerTechnology(User user, AddInterviewerTechnologyDto dto) {
         Technology technology = technologyRepository.findById(dto.technologyId())
                 .orElseThrow(() -> new RuntimeException("Technology not found"));
+
+        // Check if already exists
+        boolean exists = interviewerTechnologyRepository.existsByInterviewerIdAndTechnologyId(
+                user.getId(),
+                dto.technologyId()
+        );
+
+        if (exists) {
+            throw new RuntimeException("This technology is already added to your profile");
+        }
 
         InterviewerTechnology it = InterviewerTechnology.builder()
                 .interviewer(user)

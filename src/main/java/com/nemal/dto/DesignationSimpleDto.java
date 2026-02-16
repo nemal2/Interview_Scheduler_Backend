@@ -6,14 +6,14 @@ public record DesignationSimpleDto(
         Long id,
         String name,
         Integer levelOrder,
-        String tierName
+        TierSimpleDto tier
 ) {
-    public static DesignationSimpleDto from(Designation des) {
+    public static DesignationSimpleDto from(Designation designation) {
         return new DesignationSimpleDto(
-                des.getId(),
-                des.getName(),
-                des.getLevelOrder(),
-                des.getTier() != null ? des.getTier().getName() : null
+                designation.getId(),
+                designation.getName(),
+                designation.getLevelOrder(),
+                designation.getTier() != null ? TierSimpleDto.from(designation.getTier()) : null
         );
     }
 }

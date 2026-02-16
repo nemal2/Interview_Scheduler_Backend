@@ -10,6 +10,8 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 
+import org.hibernate.annotations.Where;
+
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.HashSet;
@@ -57,7 +59,9 @@ public class User implements UserDetails {
     private Designation currentDesignation;
 
     // ADD THIS - One-to-Many relationship with InterviewerTechnology
+    // Then in the User entity:
     @OneToMany(mappedBy = "interviewer", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    @Where(clause = "is_active = true")  // ADD THIS
     private Set<InterviewerTechnology> interviewerTechnologies = new HashSet<>();
 
     private boolean isActive = true;

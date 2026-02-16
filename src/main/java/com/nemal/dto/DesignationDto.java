@@ -14,18 +14,18 @@ public record DesignationDto(
         String description,
         boolean isActive
 ) {
-    public static DesignationDto from(Designation des) {
+    public static DesignationDto from(Designation designation) {
         return new DesignationDto(
-                des.getId(),
-                des.getName(),
-                des.getLevelOrder(),
-                des.getDepartment() != null ? des.getDepartment().getId() : null,
-                des.getDepartment() != null ? des.getDepartment().getName() : null,
-                des.getTier() != null ? des.getTier().getId() : null,
-                des.getTier() != null ? des.getTier().getName() : null,
-                des.getTier() != null ? des.getTier().getTierOrder() : null,
-                des.getDescription(),
-                des.isActive()
+                designation.getId(),
+                designation.getName(),
+                designation.getLevelOrder(),
+                designation.getDepartment() != null ? designation.getDepartment().getId() : null,
+                designation.getDepartment() != null ? designation.getDepartment().getName() : null,
+                designation.getTier() != null ? designation.getTier().getId() : null,
+                designation.getTier() != null ? designation.getTier().getName() : null,
+                designation.getTier() != null ? designation.getTier().getTierOrder() : null,
+                designation.getDescription(),
+                designation.isActive()
         );
     }
 }
