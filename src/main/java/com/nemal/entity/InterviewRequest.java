@@ -1,4 +1,3 @@
-// InterviewRequest.java
 package com.nemal.entity;
 
 import com.nemal.enums.RequestStatus;
@@ -20,28 +19,31 @@ import java.util.Set;
 @Builder
 @EntityListeners(AuditingEntityListener.class)
 public class InterviewRequest {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    // The candidate's name (can be freeform or from Candidate record)
     @Column(nullable = false)
     private String candidateName;
 
-    // NEW: Reference to actual candidate if exists
-    @ManyToOne
+    // Optional link to Candidate record
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "candidate_id")
     private Candidate candidate;
 
-    @ManyToOne
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "candidate_designation_id")
     private Designation candidateDesignation;
 
-    @ManyToMany
+    @ManyToMany(fetch = FetchType.EAGER)
     @JoinTable(
-            name = "interview_requests_technologies",
+            name = "interview_request_technologies",
             joinColumns = @JoinColumn(name = "interview_request_id"),
             inverseJoinColumns = @JoinColumn(name = "technology_id")
     )
+    @Builder.Default
     private Set<Technology> requiredTechnologies = new HashSet<>();
 
     @Column(nullable = false)
@@ -50,30 +52,42 @@ public class InterviewRequest {
     @Column(nullable = false)
     private LocalDateTime preferredEndDateTime;
 
-    @ManyToOne
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "requested_by_id", nullable = false)
     private User requestedBy;
 
-    @ManyToOne
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "assigned_interviewer_id")
     private User assignedInterviewer;
 
-    @OneToOne
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "availability_slot_id")
     private AvailabilitySlot availabilitySlot;
 
+    // If this request is part of a panel interview
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "panel_id")
+    private InterviewPanel panel;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private RequestStatus status = RequestStatus.ACCEPTED; // Changed default to ACCEPTED
+    private RequestStatus status = RequestStatus.PENDING;
+
+    private LocalDateTime respondedAt;
+
+    @Column(length = 2000)
+    private String responseNotes;
 
     @Column(nullable = false)
     private boolean isUrgent = false;
 
-    @Column(length = 1000)
+    @Column(length = 2000)
     private String notes;
 
-    @Column(length = 1000)
-    private String responseNotes;
+
+    // REPLACE with (if you want to navigate from request → schedule):
+    @OneToOne(mappedBy = "request", fetch = FetchType.LAZY)
+    private InterviewSchedule interviewSchedule;
 
     @CreatedDate
     @Column(nullable = false, updatable = false)
@@ -82,5 +96,11 @@ public class InterviewRequest {
     @LastModifiedDate
     private LocalDateTime updatedAt;
 
-    private LocalDateTime respondedAt;
+    public boolean isUrgent() {
+        return isUrgent;
+    }
+
+    public void setUrgent(boolean urgent) {
+        isUrgent = urgent;
+    }
 }

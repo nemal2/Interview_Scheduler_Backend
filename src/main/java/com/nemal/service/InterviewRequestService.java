@@ -1,198 +1,216 @@
-// InterviewRequestService.java
 package com.nemal.service;
 
 import com.nemal.dto.CreateInterviewRequestDto;
 import com.nemal.dto.InterviewRequestDto;
 import com.nemal.entity.*;
+import com.nemal.enums.CandidateStatus;
+import com.nemal.enums.InterviewStatus;
 import com.nemal.enums.RequestStatus;
 import com.nemal.enums.SlotStatus;
 import com.nemal.repository.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
+@RequiredArgsConstructor
 public class InterviewRequestService {
-
-    private static final Logger logger = LoggerFactory.getLogger(InterviewRequestService.class);
 
     private final InterviewRequestRepository interviewRequestRepository;
     private final AvailabilitySlotRepository availabilitySlotRepository;
+    private final InterviewScheduleRepository interviewScheduleRepository;
+    private final UserRepository userRepository;
+    private final CandidateRepository candidateRepository;
     private final DesignationRepository designationRepository;
     private final TechnologyRepository technologyRepository;
-    private final CandidateRepository candidateRepository;
-    private final NotificationService notificationService;
-
-    public InterviewRequestService(
-            InterviewRequestRepository interviewRequestRepository,
-            AvailabilitySlotRepository availabilitySlotRepository,
-            DesignationRepository designationRepository,
-            TechnologyRepository technologyRepository,
-            CandidateRepository candidateRepository,
-            NotificationService notificationService
-    ) {
-        this.interviewRequestRepository = interviewRequestRepository;
-        this.availabilitySlotRepository = availabilitySlotRepository;
-        this.designationRepository = designationRepository;
-        this.technologyRepository = technologyRepository;
-        this.candidateRepository = candidateRepository;
-        this.notificationService = notificationService;
-    }
 
     @Transactional
     public InterviewRequestDto createInterviewRequest(User requestedBy, CreateInterviewRequestDto dto) {
-        logger.info("Creating interview request for candidate: {} on slot: {}",
-                dto.candidateName(), dto.availabilitySlotId());
-
-        // Get the availability slot
+        // 1. Validate and fetch the slot
         AvailabilitySlot slot = availabilitySlotRepository.findById(dto.availabilitySlotId())
-                .orElseThrow(() -> new RuntimeException("Availability slot not found"));
+                .orElseThrow(() -> new RuntimeException("Availability slot not found: " + dto.availabilitySlotId()));
 
-        // Verify slot is available
         if (slot.getStatus() != SlotStatus.AVAILABLE) {
-            logger.error("Slot {} is not available, current status: {}", slot.getId(), slot.getStatus());
-            throw new RuntimeException("This time slot is no longer available");
+            throw new RuntimeException("Slot is not available");
         }
 
-        // Get designation if provided
-        Designation designation = null;
-        if (dto.candidateDesignationId() != null) {
-            designation = designationRepository.findById(dto.candidateDesignationId())
-                    .orElseThrow(() -> new RuntimeException("Designation not found"));
+        // 2. Determine booking times (use slot times if not specified)
+        LocalDateTime bookingStart = dto.preferredStartDateTime() != null
+                ? dto.preferredStartDateTime() : slot.getStartDateTime();
+        LocalDateTime bookingEnd = dto.preferredEndDateTime() != null
+                ? dto.preferredEndDateTime() : slot.getEndDateTime();
+
+        // 3. Validate booking fits within slot
+        if (bookingStart.isBefore(slot.getStartDateTime().minusSeconds(1)) ||
+                bookingEnd.isAfter(slot.getEndDateTime().plusSeconds(1))) {
+            throw new RuntimeException("Booking time must be within the slot's available time: " +
+                    "booking=[" + bookingStart + " - " + bookingEnd + "] " +
+                    "slot=[" + slot.getStartDateTime() + " - " + slot.getEndDateTime() + "]");
         }
 
-        // Get technologies
-        Set<Technology> technologies = new HashSet<>();
-        if (dto.requiredTechnologyIds() != null && !dto.requiredTechnologyIds().isEmpty()) {
-            technologies = new HashSet<>(technologyRepository.findAllById(dto.requiredTechnologyIds()));
-            logger.info("Found {} technologies for the interview", technologies.size());
-        }
-
-        // Get or create candidate if candidateId is provided
+        // 4. Fetch candidate
         Candidate candidate = null;
         if (dto.candidateId() != null) {
             candidate = candidateRepository.findById(dto.candidateId())
-                    .orElseThrow(() -> new RuntimeException("Candidate not found"));
+                    .orElseThrow(() -> new RuntimeException("Candidate not found: " + dto.candidateId()));
         }
 
-        // Create interview request - AUTOMATICALLY ACCEPTED
+        String candidateName = dto.candidateName() != null ? dto.candidateName()
+                : (candidate != null ? candidate.getName() : "Unknown");
+
+        // 5. Fetch designation
+        Designation candidateDesignation = null;
+        if (dto.candidateDesignationId() != null) {
+            candidateDesignation = designationRepository.findById(dto.candidateDesignationId())
+                    .orElseThrow(() -> new RuntimeException("Designation not found"));
+        }
+
+        // 6. Fetch technologies
+        List<Technology> technologies = dto.requiredTechnologyIds() != null
+                ? technologyRepository.findAllById(dto.requiredTechnologyIds())
+                : List.of();
+
+        // 7. Build the interview request — auto-accepted, no interviewer approval needed
         InterviewRequest request = InterviewRequest.builder()
-                .candidateName(dto.candidateName())
+                .candidateName(candidateName)
                 .candidate(candidate)
-                .candidateDesignation(designation)
-                .requiredTechnologies(technologies)
-                .preferredStartDateTime(dto.preferredStartDateTime())
-                .preferredEndDateTime(dto.preferredEndDateTime())
+                .candidateDesignation(candidateDesignation)
+                .preferredStartDateTime(bookingStart)
+                .preferredEndDateTime(bookingEnd)
                 .requestedBy(requestedBy)
                 .assignedInterviewer(slot.getInterviewer())
                 .availabilitySlot(slot)
-                .status(RequestStatus.ACCEPTED) // AUTO-ACCEPT
-                .respondedAt(LocalDateTime.now()) // Set responded time immediately
+                .status(RequestStatus.ACCEPTED)
+                .respondedAt(LocalDateTime.now())
+                .responseNotes("Auto-accepted by HR scheduling")
                 .isUrgent(dto.isUrgent())
                 .notes(dto.notes())
-                .responseNotes("Auto-accepted when scheduled by HR")
                 .build();
 
-        request = interviewRequestRepository.save(request);
-        logger.info("Created and auto-accepted interview request with ID: {}", request.getId());
+        request.getRequiredTechnologies().addAll(technologies);
 
-        // Mark slot as BOOKED immediately
-        slot.setStatus(SlotStatus.BOOKED);
-        availabilitySlotRepository.save(slot);
-        logger.info("Marked slot {} as BOOKED", slot.getId());
+        // 8. Handle slot splitting
+        boolean isPartialBooking = !bookingStart.equals(slot.getStartDateTime())
+                || !bookingEnd.equals(slot.getEndDateTime());
 
-        // Update candidate status if candidate exists
+        if (isPartialBooking) {
+            slot.setStatus(SlotStatus.BOOKED);
+            slot.setActive(false);
+            availabilitySlotRepository.save(slot);
+
+            if (bookingStart.isAfter(slot.getStartDateTime())) {
+                AvailabilitySlot beforeSlot = AvailabilitySlot.builder()
+                        .interviewer(slot.getInterviewer())
+                        .startDateTime(slot.getStartDateTime())
+                        .endDateTime(bookingStart)
+                        .status(SlotStatus.AVAILABLE)
+                        .description(slot.getDescription())
+                        .isActive(true)
+                        .build();
+                availabilitySlotRepository.save(beforeSlot);
+            }
+
+            if (bookingEnd.isBefore(slot.getEndDateTime())) {
+                AvailabilitySlot afterSlot = AvailabilitySlot.builder()
+                        .interviewer(slot.getInterviewer())
+                        .startDateTime(bookingEnd)
+                        .endDateTime(slot.getEndDateTime())
+                        .status(SlotStatus.AVAILABLE)
+                        .description(slot.getDescription())
+                        .isActive(true)
+                        .build();
+                availabilitySlotRepository.save(afterSlot);
+            }
+        } else {
+            slot.setStatus(SlotStatus.BOOKED);
+            availabilitySlotRepository.save(slot);
+        }
+
+        // 9. Save request
+        InterviewRequest saved = interviewRequestRepository.save(request);
+
+        // 10. Auto-create InterviewSchedule
+        InterviewSchedule schedule = InterviewSchedule.builder()
+                .request(saved)
+                .interviewer(slot.getInterviewer())
+                .startDateTime(bookingStart)
+                .endDateTime(bookingEnd)
+                .status(InterviewStatus.SCHEDULED)
+                .build();
+        interviewScheduleRepository.save(schedule);
+
+        // 11. Update candidate status
         if (candidate != null) {
-            candidate.setStatus(com.nemal.enums.CandidateStatus.SCHEDULED);
+            candidate.setStatus(CandidateStatus.SCHEDULED);
             candidateRepository.save(candidate);
-            logger.info("Updated candidate {} status to SCHEDULED", candidate.getId());
         }
 
-        // Send notification to interviewer (informational only)
-        try {
-            notificationService.sendInterviewScheduledNotification(request);
-        } catch (Exception e) {
-            logger.error("Failed to send notification: {}", e.getMessage());
-            // Don't fail the request if notification fails
-        }
+        return InterviewRequestDto.from(saved);
+    }
 
-        return InterviewRequestDto.from(request);
+    public List<InterviewRequestDto> getRequestsByUser(Long userId) {
+        return interviewRequestRepository.findByRequestedById(userId)
+                .stream().map(InterviewRequestDto::from).collect(Collectors.toList());
+    }
+
+    public List<InterviewRequestDto> getRequestsByCandidate(Long candidateId) {
+        return interviewRequestRepository.findByCandidateId(candidateId)
+                .stream().map(InterviewRequestDto::from).collect(Collectors.toList());
+    }
+
+    public List<InterviewRequestDto> getUpcomingInterviewsForInterviewer(Long interviewerId) {
+        return interviewRequestRepository.findUpcomingInterviewsForInterviewer(interviewerId, LocalDateTime.now())
+                .stream().map(InterviewRequestDto::from).collect(Collectors.toList());
+    }
+
+    public List<InterviewRequestDto> getInterviewsForInterviewer(Long interviewerId) {
+        return interviewRequestRepository.findByAssignedInterviewerId(interviewerId)
+                .stream().map(InterviewRequestDto::from).collect(Collectors.toList());
     }
 
     @Transactional
-    public void cancelInterviewRequest(User hrUser, Long requestId) {
-        logger.info("HR user {} canceling request {}", hrUser.getId(), requestId);
-
+    public InterviewRequestDto respondToRequest(User interviewer, Long requestId, String action, String notes) {
         InterviewRequest request = interviewRequestRepository.findById(requestId)
-                .orElseThrow(() -> new RuntimeException("Interview request not found"));
+                .orElseThrow(() -> new RuntimeException("Request not found: " + requestId));
 
-        // Only HR who created the request can cancel
-        if (!request.getRequestedBy().getId().equals(hrUser.getId())) {
-            throw new RuntimeException("Unauthorized - you did not create this request");
+        if (!request.getAssignedInterviewer().getId().equals(interviewer.getId())) {
+            throw new RuntimeException("You are not assigned to this request");
         }
 
-        // Can only cancel ACCEPTED requests (since we auto-accept now)
-        if (request.getStatus() != RequestStatus.ACCEPTED) {
-            throw new RuntimeException("Cannot cancel this request in its current status");
+        if ("ACCEPT".equalsIgnoreCase(action)) {
+            request.setStatus(RequestStatus.ACCEPTED);
+        } else if ("DECLINE".equalsIgnoreCase(action)) {
+            request.setStatus(RequestStatus.REJECTED);
+            if (request.getAvailabilitySlot() != null) {
+                AvailabilitySlot slot = request.getAvailabilitySlot();
+                slot.setStatus(SlotStatus.AVAILABLE);
+                availabilitySlotRepository.save(slot);
+            }
+        } else {
+            throw new RuntimeException("Invalid action: " + action);
         }
 
-        // Free up the slot
-        AvailabilitySlot slot = request.getAvailabilitySlot();
-        if (slot != null) {
+        request.setRespondedAt(LocalDateTime.now());
+        request.setResponseNotes(notes);
+        return InterviewRequestDto.from(interviewRequestRepository.save(request));
+    }
+
+    @Transactional
+    public void cancelRequest(User user, Long requestId) {
+        InterviewRequest request = interviewRequestRepository.findById(requestId)
+                .orElseThrow(() -> new RuntimeException("Request not found: " + requestId));
+
+        if (request.getAvailabilitySlot() != null) {
+            AvailabilitySlot slot = request.getAvailabilitySlot();
             slot.setStatus(SlotStatus.AVAILABLE);
-            slot.setInterviewSchedule(null);
             availabilitySlotRepository.save(slot);
-            logger.info("Freed up slot {} after cancellation", slot.getId());
         }
 
-        // Update candidate status if candidate exists
-        if (request.getCandidate() != null) {
-            request.getCandidate().setStatus(com.nemal.enums.CandidateStatus.SCREENING);
-            candidateRepository.save(request.getCandidate());
-        }
-
-        // Update request status
         request.setStatus(RequestStatus.CANCELLED);
         interviewRequestRepository.save(request);
-        logger.info("Cancelled interview request {}", requestId);
-
-        // Notify interviewer about cancellation
-        try {
-            notificationService.sendInterviewCancelledNotification(request);
-        } catch (Exception e) {
-            logger.error("Failed to send cancellation notification: {}", e.getMessage());
-        }
-    }
-
-    public List<InterviewRequestDto> getMyRequests(User interviewer) {
-        return interviewRequestRepository.findByAssignedInterviewerId(interviewer.getId())
-                .stream()
-                .map(InterviewRequestDto::from)
-                .collect(Collectors.toList());
-    }
-
-    public List<InterviewRequestDto> getUpcomingInterviews(User interviewer) {
-        return interviewRequestRepository.findUpcomingInterviewsForInterviewer(interviewer.getId(), LocalDateTime.now())
-                .stream()
-                .map(InterviewRequestDto::from)
-                .collect(Collectors.toList());
-    }
-
-    public long getUpcomingInterviewCount(User interviewer) {
-        return interviewRequestRepository.countUpcomingInterviewsForInterviewer(interviewer.getId());
-    }
-
-    public List<InterviewRequestDto> getHRRequests(User hrUser) {
-        return interviewRequestRepository.findByRequestedById(hrUser.getId())
-                .stream()
-                .map(InterviewRequestDto::from)
-                .collect(Collectors.toList());
     }
 }

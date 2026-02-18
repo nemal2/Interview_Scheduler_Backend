@@ -1,10 +1,11 @@
-// InterviewRequestController.java
 package com.nemal.controller;
 
 import com.nemal.dto.CreateInterviewRequestDto;
 import com.nemal.dto.InterviewRequestDto;
 import com.nemal.entity.User;
 import com.nemal.service.InterviewRequestService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -14,10 +15,11 @@ import java.util.List;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/api/interview-requests")
+@RequestMapping("/api/hr/interviews")
 @CrossOrigin(origins = "http://localhost:5173")
 public class InterviewRequestController {
 
+    private static final Logger logger = LoggerFactory.getLogger(InterviewRequestController.class);
     private final InterviewRequestService interviewRequestService;
 
     public InterviewRequestController(InterviewRequestService interviewRequestService) {
@@ -25,68 +27,58 @@ public class InterviewRequestController {
     }
 
     /**
-     * Create interview request (auto-accepted)
+     * HR schedules a single-interviewer interview.
+     * Supports partial slot booking (slot splitting).
      */
     @PostMapping
-    public ResponseEntity<InterviewRequestDto> createInterviewRequest(
+    public ResponseEntity<?> createInterviewRequest(
             @AuthenticationPrincipal User user,
-            @RequestBody CreateInterviewRequestDto dto
-    ) {
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(interviewRequestService.createInterviewRequest(user, dto));
+            @RequestBody CreateInterviewRequestDto dto) {
+        try {
+            InterviewRequestDto result = interviewRequestService.createInterviewRequest(user, dto);
+            return ResponseEntity.status(HttpStatus.CREATED).body(result);
+        } catch (Exception e) {
+            logger.error("Failed to create interview request: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("message", e.getMessage()));
+        }
     }
 
-    /**
-     * Get interviewer's scheduled interviews
-     */
-    @GetMapping("/my-interviews")
-    public ResponseEntity<List<InterviewRequestDto>> getMyInterviews(
-            @AuthenticationPrincipal User user
-    ) {
-        return ResponseEntity.ok(interviewRequestService.getMyRequests(user));
+    @GetMapping("/my-requests")
+    public ResponseEntity<?> getMyRequests(@AuthenticationPrincipal User user) {
+        try {
+            List<InterviewRequestDto> result = interviewRequestService.getRequestsByUser(user.getId());
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            logger.error("Failed to get requests for user {}: {}", user.getId(), e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("message", e.getMessage()));
+        }
     }
 
-    /**
-     * Get upcoming interviews for interviewer
-     */
-    @GetMapping("/upcoming")
-    public ResponseEntity<List<InterviewRequestDto>> getUpcomingInterviews(
-            @AuthenticationPrincipal User user
-    ) {
-        return ResponseEntity.ok(interviewRequestService.getUpcomingInterviews(user));
+    @GetMapping("/candidate/{candidateId}")
+    public ResponseEntity<?> getRequestsByCandidate(@PathVariable Long candidateId) {
+        try {
+            List<InterviewRequestDto> result = interviewRequestService.getRequestsByCandidate(candidateId);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            logger.error("Failed to get requests for candidate {}: {}", candidateId, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("message", e.getMessage()));
+        }
     }
 
-    /**
-     * Get HR's created interview requests
-     */
-    @GetMapping("/hr-requests")
-    public ResponseEntity<List<InterviewRequestDto>> getHRRequests(
-            @AuthenticationPrincipal User user
-    ) {
-        return ResponseEntity.ok(interviewRequestService.getHRRequests(user));
-    }
-
-    /**
-     * Cancel interview request (HR only)
-     */
-    @DeleteMapping("/{requestId}/cancel")
-    public ResponseEntity<Void> cancelRequest(
+    @DeleteMapping("/{requestId}")
+    public ResponseEntity<?> cancelRequest(
             @AuthenticationPrincipal User user,
-            @PathVariable Long requestId
-    ) {
-        interviewRequestService.cancelInterviewRequest(user, requestId);
-        return ResponseEntity.noContent().build();
-    }
-
-    /**
-     * Get interview statistics for interviewer
-     */
-    @GetMapping("/stats")
-    public ResponseEntity<Map<String, Long>> getRequestStats(
-            @AuthenticationPrincipal User user
-    ) {
-        return ResponseEntity.ok(Map.of(
-                "upcomingInterviews", interviewRequestService.getUpcomingInterviewCount(user)
-        ));
+            @PathVariable Long requestId) {
+        try {
+            interviewRequestService.cancelRequest(user, requestId);
+            return ResponseEntity.noContent().build();
+        } catch (Exception e) {
+            logger.error("Failed to cancel request {}: {}", requestId, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("message", e.getMessage()));
+        }
     }
 }

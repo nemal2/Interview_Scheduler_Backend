@@ -2,6 +2,7 @@ package com.nemal.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.SQLRestriction;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
@@ -11,6 +12,7 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "interviewer_technologies",
         uniqueConstraints = @UniqueConstraint(columnNames = {"interviewer_id", "technology_id"}))
+@SQLRestriction("is_active = true")  // Hibernate 6+ way to filter
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

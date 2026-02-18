@@ -50,6 +50,9 @@ public class SecurityConfig {
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/hr/**").hasRole("HR")
                         .requestMatchers("/api/interviewer/**").hasRole("INTERVIEWER")
+                        .requestMatchers("/api/interview-requests/upcoming").hasAnyRole("INTERVIEWER", "HR", "ADMIN")
+                        .requestMatchers("/api/hr/**").hasAnyRole("HR", "ADMIN")
+                        .requestMatchers("/api/interview-requests/**").hasAnyRole("INTERVIEWER", "HR", "ADMIN")
                         .anyRequest().authenticated()
                 )
                 .sessionManagement(session ->

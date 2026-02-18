@@ -43,6 +43,15 @@ public class HRAvailabilityService {
             logger.info("=== FILTER REQUEST START ===");
             logger.info("Filter: {}", filter);
 
+            // Enable debug for this transaction
+            org.slf4j.Logger rootLogger = org.slf4j.LoggerFactory.getLogger("com.nemal.service.HRAvailabilityService");
+            if (rootLogger instanceof ch.qos.logback.classic.Logger) {
+                ch.qos.logback.classic.Logger logbackLogger = (ch.qos.logback.classic.Logger) rootLogger;
+                ch.qos.logback.classic.Level originalLevel = logbackLogger.getLevel();
+                logbackLogger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+                logger.debug("DEBUG logging enabled for this request");
+            }
+
             if (filter == null) {
                 slots = availabilitySlotRepository.findAllAvailableSlots(now);
             } else {
@@ -75,8 +84,8 @@ public class HRAvailabilityService {
         List<AvailabilitySlot> slots;
 
         try {
-            // CRITICAL: Clear the persistence context to avoid stale data
-            entityManager.clear();
+            // DO NOT clear entity manager - it causes collections to be re-lazy-loaded
+            // entityManager.clear();
 
             // First apply date range if provided
             if (filter.startDateTime() != null && filter.endDateTime() != null) {
@@ -104,73 +113,61 @@ public class HRAvailabilityService {
                 logger.info("Step 2 - After department filter: {} slots", slots.size());
             }
 
-            // Apply technology filter with DETAILED DEBUGGING
+            // Apply technology filter - FIXED WITH DEBUG
             if (filter.technologyIds() != null && !filter.technologyIds().isEmpty()) {
                 logger.info("Step 3 - Filtering by technologies: {}", filter.technologyIds());
-
-                List<AvailabilitySlot> passedSlots = new ArrayList<>();
-
-                for (AvailabilitySlot slot : slots) {
-                    try {
-                        if (slot.getInterviewer() == null) {
-                            logger.info("  Slot {} - SKIP: null interviewer", slot.getId());
-                            continue;
-                        }
-
-                        Long interviewerId = slot.getInterviewer().getId();
-
-                        logger.info("  Slot {} - Interviewer {}", slot.getId(), interviewerId);
-
-                        // CRITICAL: Force Hibernate to initialize the lazy collection
-                        Set<InterviewerTechnology> interviewerTechs = slot.getInterviewer().getInterviewerTechnologies();
-
-                        logger.info("    → Collection class: {}", interviewerTechs.getClass().getName());
-                        logger.info("    → Collection size BEFORE initialize: {}", interviewerTechs.size());
-
-                        Hibernate.initialize(interviewerTechs);
-
-                        logger.info("    → Collection size AFTER initialize: {}", interviewerTechs.size());
-                        logger.info("    → Is empty: {}", interviewerTechs.isEmpty());
-
-                        if (interviewerTechs == null || interviewerTechs.isEmpty()) {
-                            logger.info("    → Has NO technologies");
-                            continue;
-                        }
-
-                        // Extract technology IDs
-                        List<Long> interviewerTechIds = new ArrayList<>();
-                        for (InterviewerTechnology it : interviewerTechs) {
-                            if (it != null && it.isActive() && it.getTechnology() != null) {
-                                interviewerTechIds.add(it.getTechnology().getId());
+                slots = slots.stream()
+                        .filter(slot -> {
+                            if (slot.getInterviewer() == null) {
+                                logger.debug("  Slot {} - SKIP: No interviewer", slot.getId());
+                                return false;
                             }
-                        }
 
-                        logger.info("    → Has technologies: {}", interviewerTechIds);
-                        logger.info("    → Filter requires: {}", filter.technologyIds());
+                            // Force initialization of the collection
+                            Set<InterviewerTechnology> interviewerTechs = slot.getInterviewer().getInterviewerTechnologies();
 
-                        // Check if ANY match
-                        boolean hasMatch = false;
-                        for (Long requiredTechId : filter.technologyIds()) {
-                            if (interviewerTechIds.contains(requiredTechId)) {
-                                hasMatch = true;
-                                logger.info("    → ✓ MATCH FOUND: Technology ID {}", requiredTechId);
-                                break;
+                            // Initialize if lazy loaded
+                            if (!Hibernate.isInitialized(interviewerTechs)) {
+                                logger.debug("  Slot {} - Initializing interviewer technologies (lazy)", slot.getId());
+                                Hibernate.initialize(interviewerTechs);
                             }
-                        }
 
-                        if (hasMatch) {
-                            passedSlots.add(slot);
-                            logger.info("    → ✓✓ SLOT PASSED");
-                        } else {
-                            logger.info("    → ✗✗ SLOT FILTERED OUT");
-                        }
+                            logger.debug("  Slot {} - Interviewer {} has {} technologies",
+                                    slot.getId(),
+                                    slot.getInterviewer().getId(),
+                                    interviewerTechs != null ? interviewerTechs.size() : 0);
 
-                    } catch (Exception e) {
-                        logger.error("Error checking slot {}: {}", slot.getId(), e.getMessage(), e);
-                    }
-                }
+                            if (interviewerTechs == null || interviewerTechs.isEmpty()) {
+                                logger.debug("  Slot {} - SKIP: No technologies", slot.getId());
+                                return false;
+                            }
 
-                slots = passedSlots;
+                            // Log what technologies this interviewer has
+                            List<Long> interviewerTechIds = interviewerTechs.stream()
+                                    .filter(it -> it != null && it.isActive() && it.getTechnology() != null)
+                                    .map(it -> {
+                                        Long techId = it.getTechnology().getId();
+                                        logger.debug("    - Has tech ID: {} ({})", techId, it.getTechnology().getName());
+                                        return techId;
+                                    })
+                                    .collect(Collectors.toList());
+
+                            logger.debug("  Slot {} - Interviewer tech IDs: {}", slot.getId(), interviewerTechIds);
+                            logger.debug("  Slot {} - Required tech IDs: {}", slot.getId(), filter.technologyIds());
+
+                            boolean hasTechnology = interviewerTechs.stream()
+                                    .filter(it -> it != null && it.isActive() && it.getTechnology() != null)
+                                    .anyMatch(it -> filter.technologyIds().contains(it.getTechnology().getId()));
+
+                            if (!hasTechnology) {
+                                logger.debug("  Slot {} - SKIP: No matching technology", slot.getId());
+                                return false;
+                            }
+
+                            logger.debug("  Slot {} - PASS: Has matching technology", slot.getId());
+                            return true;
+                        })
+                        .collect(Collectors.toList());
                 logger.info("Step 3 - After technology filter: {} slots", slots.size());
             }
 
