@@ -19,7 +19,8 @@ public interface AvailabilitySlotRepository extends JpaRepository<AvailabilitySl
             LocalDateTime end
     );
 
-    // UPDATED: Added eager fetching for interviewerTechnologies and tier
+    // ── AVAILABLE only (used for conflict checks etc.) ───────────────────────
+
     @Query("SELECT DISTINCT s FROM AvailabilitySlot s " +
             "LEFT JOIN FETCH s.interviewer i " +
             "LEFT JOIN FETCH i.department " +
@@ -33,7 +34,6 @@ public interface AvailabilitySlotRepository extends JpaRepository<AvailabilitySl
             "ORDER BY s.startDateTime")
     List<AvailabilitySlot> findAllAvailableSlots(@Param("now") LocalDateTime now);
 
-    // UPDATED: Added eager fetching for interviewerTechnologies and tier
     @Query("SELECT DISTINCT s FROM AvailabilitySlot s " +
             "LEFT JOIN FETCH s.interviewer i " +
             "LEFT JOIN FETCH i.department " +
@@ -51,6 +51,44 @@ public interface AvailabilitySlotRepository extends JpaRepository<AvailabilitySl
             @Param("end") LocalDateTime end
     );
 
+    // ── AVAILABLE + BOOKED (used by HR calendar to show full picture) ────────
+
+    @Query("SELECT DISTINCT s FROM AvailabilitySlot s " +
+            "LEFT JOIN FETCH s.interviewer i " +
+            "LEFT JOIN FETCH i.department " +
+            "LEFT JOIN FETCH i.currentDesignation d " +
+            "LEFT JOIN FETCH d.tier " +
+            "LEFT JOIN FETCH i.interviewerTechnologies it " +
+            "LEFT JOIN FETCH it.technology " +
+            "LEFT JOIN FETCH s.interviewSchedule sch " +
+            "LEFT JOIN FETCH sch.request " +
+            "WHERE s.isActive = true " +
+            "AND (s.status = 'AVAILABLE' OR s.status = 'BOOKED') " +
+            "AND s.startDateTime >= :now " +
+            "ORDER BY s.startDateTime")
+    List<AvailabilitySlot> findAllActiveSlotsForHR(@Param("now") LocalDateTime now);
+
+    @Query("SELECT DISTINCT s FROM AvailabilitySlot s " +
+            "LEFT JOIN FETCH s.interviewer i " +
+            "LEFT JOIN FETCH i.department " +
+            "LEFT JOIN FETCH i.currentDesignation d " +
+            "LEFT JOIN FETCH d.tier " +
+            "LEFT JOIN FETCH i.interviewerTechnologies it " +
+            "LEFT JOIN FETCH it.technology " +
+            "LEFT JOIN FETCH s.interviewSchedule sch " +
+            "LEFT JOIN FETCH sch.request " +
+            "WHERE s.isActive = true " +
+            "AND (s.status = 'AVAILABLE' OR s.status = 'BOOKED') " +
+            "AND s.startDateTime >= :start " +
+            "AND s.endDateTime <= :end " +
+            "ORDER BY s.startDateTime")
+    List<AvailabilitySlot> findAllActiveSlotsForHRByDateRange(
+            @Param("start") LocalDateTime start,
+            @Param("end") LocalDateTime end
+    );
+
+    // ── Conflict detection (only AVAILABLE slots) ────────────────────────────
+
     @Query("SELECT s FROM AvailabilitySlot s " +
             "WHERE s.interviewer.id = :interviewerId " +
             "AND s.isActive = true " +
@@ -62,6 +100,8 @@ public interface AvailabilitySlotRepository extends JpaRepository<AvailabilitySl
             @Param("start") LocalDateTime start,
             @Param("end") LocalDateTime end
     );
+
+    // ── Stats ─────────────────────────────────────────────────────────────────
 
     @Query("SELECT COUNT(s) FROM AvailabilitySlot s " +
             "WHERE s.interviewer.id = :interviewerId " +

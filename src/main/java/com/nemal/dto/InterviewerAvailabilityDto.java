@@ -17,7 +17,8 @@ public record InterviewerAvailabilityDto(
         LocalDateTime startDateTime,
         LocalDateTime endDateTime,
         String status,
-        Integer yearsOfExperience
+        Integer yearsOfExperience,
+        String candidateName   // populated for BOOKED slots
 ) {
     public static InterviewerAvailabilityDto from(AvailabilitySlot slot) {
         if (slot == null || slot.getInterviewer() == null) {
@@ -26,19 +27,12 @@ public record InterviewerAvailabilityDto(
 
         var interviewer = slot.getInterviewer();
 
-        // Safely get department name
-        String departmentName = null;
-        if (interviewer.getDepartment() != null) {
-            departmentName = interviewer.getDepartment().getName();
-        }
+        String departmentName = interviewer.getDepartment() != null
+                ? interviewer.getDepartment().getName() : null;
 
-        // Safely get designation name
-        String designationName = null;
-        if (interviewer.getCurrentDesignation() != null) {
-            designationName = interviewer.getCurrentDesignation().getName();
-        }
+        String designationName = interviewer.getCurrentDesignation() != null
+                ? interviewer.getCurrentDesignation().getName() : null;
 
-        // Safely get technologies
         List<String> techList = List.of();
         try {
             if (interviewer.getInterviewerTechnologies() != null) {
@@ -48,8 +42,27 @@ public record InterviewerAvailabilityDto(
                         .collect(Collectors.toList());
             }
         } catch (Exception e) {
-            // Log but don't fail - just return empty list
-            System.err.println("Error getting technologies for interviewer " + interviewer.getId() + ": " + e.getMessage());
+            System.err.println("Error getting technologies for interviewer "
+                    + interviewer.getId() + ": " + e.getMessage());
+        }
+
+        // Resolve candidateName for booked slots
+        String candidateName = null;
+        if ("BOOKED".equals(slot.getStatus().name())) {
+            // Via interviewSchedule → request chain
+            if (slot.getInterviewSchedule() != null
+                    && slot.getInterviewSchedule().getRequest() != null) {
+                candidateName = slot.getInterviewSchedule().getRequest().getCandidateName();
+            }
+            // Fall back to description pattern
+            if (candidateName == null && slot.getDescription() != null) {
+                String desc = slot.getDescription();
+                if (desc.startsWith("Panel Interview: ")) {
+                    candidateName = desc.substring("Panel Interview: ".length()).trim();
+                } else if (desc.startsWith("Interview: ")) {
+                    candidateName = desc.substring("Interview: ".length()).trim();
+                }
+            }
         }
 
         return new InterviewerAvailabilityDto(
@@ -63,7 +76,8 @@ public record InterviewerAvailabilityDto(
                 slot.getStartDateTime(),
                 slot.getEndDateTime(),
                 slot.getStatus().name(),
-                interviewer.getYearsOfExperience()
+                interviewer.getYearsOfExperience(),
+                candidateName
         );
     }
 }

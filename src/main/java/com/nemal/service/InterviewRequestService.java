@@ -30,26 +30,29 @@ public class InterviewRequestService {
 
     @Transactional
     public InterviewRequestDto createInterviewRequest(User requestedBy, CreateInterviewRequestDto dto) {
+
         // 1. Validate and fetch the slot
         AvailabilitySlot slot = availabilitySlotRepository.findById(dto.availabilitySlotId())
-                .orElseThrow(() -> new RuntimeException("Availability slot not found: " + dto.availabilitySlotId()));
+                .orElseThrow(() -> new RuntimeException(
+                        "Availability slot not found: " + dto.availabilitySlotId()));
 
         if (slot.getStatus() != SlotStatus.AVAILABLE) {
             throw new RuntimeException("Slot is not available");
         }
 
-        // 2. Determine booking times (use slot times if not specified)
+        // 2. Determine booking times
         LocalDateTime bookingStart = dto.preferredStartDateTime() != null
                 ? dto.preferredStartDateTime() : slot.getStartDateTime();
         LocalDateTime bookingEnd = dto.preferredEndDateTime() != null
                 ? dto.preferredEndDateTime() : slot.getEndDateTime();
 
         // 3. Validate booking fits within slot
-        if (bookingStart.isBefore(slot.getStartDateTime().minusSeconds(1)) ||
-                bookingEnd.isAfter(slot.getEndDateTime().plusSeconds(1))) {
-            throw new RuntimeException("Booking time must be within the slot's available time: " +
-                    "booking=[" + bookingStart + " - " + bookingEnd + "] " +
-                    "slot=[" + slot.getStartDateTime() + " - " + slot.getEndDateTime() + "]");
+        if (bookingStart.isBefore(slot.getStartDateTime().minusSeconds(1))
+                || bookingEnd.isAfter(slot.getEndDateTime().plusSeconds(1))) {
+            throw new RuntimeException(
+                    "Booking time must be within the slot's available time: "
+                            + "booking=[" + bookingStart + " - " + bookingEnd + "] "
+                            + "slot=[" + slot.getStartDateTime() + " - " + slot.getEndDateTime() + "]");
         }
 
         // 4. Fetch candidate
@@ -58,7 +61,6 @@ public class InterviewRequestService {
             candidate = candidateRepository.findById(dto.candidateId())
                     .orElseThrow(() -> new RuntimeException("Candidate not found: " + dto.candidateId()));
         }
-
         String candidateName = dto.candidateName() != null ? dto.candidateName()
                 : (candidate != null ? candidate.getName() : "Unknown");
 
@@ -74,7 +76,11 @@ public class InterviewRequestService {
                 ? technologyRepository.findAllById(dto.requiredTechnologyIds())
                 : List.of();
 
-        // 7. Build the interview request — auto-accepted, no interviewer approval needed
+        // 7. Handle slot splitting and obtain the actual BOOKED slot reference
+        //    This MUST happen before building the request so we can link to the correct slot.
+        AvailabilitySlot bookedSlot = splitAndBookSlot(slot, bookingStart, bookingEnd, candidateName);
+
+        // 8. Build the interview request — auto-accepted, linked to the booked slot
         InterviewRequest request = InterviewRequest.builder()
                 .candidateName(candidateName)
                 .candidate(candidate)
@@ -83,7 +89,7 @@ public class InterviewRequestService {
                 .preferredEndDateTime(bookingEnd)
                 .requestedBy(requestedBy)
                 .assignedInterviewer(slot.getInterviewer())
-                .availabilitySlot(slot)
+                .availabilitySlot(bookedSlot)          // ← always the active BOOKED slot
                 .status(RequestStatus.ACCEPTED)
                 .respondedAt(LocalDateTime.now())
                 .responseNotes("Auto-accepted by HR scheduling")
@@ -93,47 +99,10 @@ public class InterviewRequestService {
 
         request.getRequiredTechnologies().addAll(technologies);
 
-        // 8. Handle slot splitting
-        boolean isPartialBooking = !bookingStart.equals(slot.getStartDateTime())
-                || !bookingEnd.equals(slot.getEndDateTime());
-
-        if (isPartialBooking) {
-            slot.setStatus(SlotStatus.BOOKED);
-            slot.setActive(false);
-            availabilitySlotRepository.save(slot);
-
-            if (bookingStart.isAfter(slot.getStartDateTime())) {
-                AvailabilitySlot beforeSlot = AvailabilitySlot.builder()
-                        .interviewer(slot.getInterviewer())
-                        .startDateTime(slot.getStartDateTime())
-                        .endDateTime(bookingStart)
-                        .status(SlotStatus.AVAILABLE)
-                        .description(slot.getDescription())
-                        .isActive(true)
-                        .build();
-                availabilitySlotRepository.save(beforeSlot);
-            }
-
-            if (bookingEnd.isBefore(slot.getEndDateTime())) {
-                AvailabilitySlot afterSlot = AvailabilitySlot.builder()
-                        .interviewer(slot.getInterviewer())
-                        .startDateTime(bookingEnd)
-                        .endDateTime(slot.getEndDateTime())
-                        .status(SlotStatus.AVAILABLE)
-                        .description(slot.getDescription())
-                        .isActive(true)
-                        .build();
-                availabilitySlotRepository.save(afterSlot);
-            }
-        } else {
-            slot.setStatus(SlotStatus.BOOKED);
-            availabilitySlotRepository.save(slot);
-        }
-
         // 9. Save request
         InterviewRequest saved = interviewRequestRepository.save(request);
 
-        // 10. Auto-create InterviewSchedule
+        // 10. Auto-create InterviewSchedule and link it back to the booked slot
         InterviewSchedule schedule = InterviewSchedule.builder()
                 .request(saved)
                 .interviewer(slot.getInterviewer())
@@ -141,7 +110,11 @@ public class InterviewRequestService {
                 .endDateTime(bookingEnd)
                 .status(InterviewStatus.SCHEDULED)
                 .build();
-        interviewScheduleRepository.save(schedule);
+        schedule = interviewScheduleRepository.save(schedule);
+
+        // Link schedule → booked slot so AvailabilitySlotDto can resolve candidateName
+        bookedSlot.setInterviewSchedule(schedule);
+        availabilitySlotRepository.save(bookedSlot);
 
         // 11. Update candidate status
         if (candidate != null) {
@@ -151,6 +124,78 @@ public class InterviewRequestService {
 
         return InterviewRequestDto.from(saved);
     }
+
+    /**
+     * Splits the original slot around the booking window.
+     *
+     * <ul>
+     *   <li>If booking covers the full slot: marks the existing slot BOOKED and returns it.</li>
+     *   <li>If partial booking: deactivates the original slot, creates AVAILABLE remainder(s),
+     *       and creates a new active BOOKED slot for the booked window so it is visible on
+     *       both the interviewer and HR calendars.</li>
+     * </ul>
+     *
+     * @return the active BOOKED slot (either the original or a newly created one)
+     */
+    private AvailabilitySlot splitAndBookSlot(AvailabilitySlot slot,
+                                              LocalDateTime bookStart,
+                                              LocalDateTime bookEnd,
+                                              String candidateName) {
+        boolean isPartialBooking = !bookStart.equals(slot.getStartDateTime())
+                || !bookEnd.equals(slot.getEndDateTime());
+
+        if (!isPartialBooking) {
+            // Full booking — just update the existing slot in place
+            slot.setStatus(SlotStatus.BOOKED);
+            slot.setDescription("Interview: " + candidateName);
+            return availabilitySlotRepository.save(slot);
+        }
+
+        // Partial booking — deactivate original, create splits
+        slot.setActive(false);
+        availabilitySlotRepository.save(slot);
+
+        // Remainder BEFORE the booking window
+        if (bookStart.isAfter(slot.getStartDateTime())) {
+            AvailabilitySlot before = AvailabilitySlot.builder()
+                    .interviewer(slot.getInterviewer())
+                    .startDateTime(slot.getStartDateTime())
+                    .endDateTime(bookStart)
+                    .status(SlotStatus.AVAILABLE)
+                    .description(slot.getDescription())
+                    .isActive(true)
+                    .build();
+            availabilitySlotRepository.save(before);
+        }
+
+        // Active BOOKED slot for the actual interview window (visible on calendars)
+        AvailabilitySlot booked = AvailabilitySlot.builder()
+                .interviewer(slot.getInterviewer())
+                .startDateTime(bookStart)
+                .endDateTime(bookEnd)
+                .status(SlotStatus.BOOKED)
+                .description("Interview: " + candidateName)
+                .isActive(true)
+                .build();
+        booked = availabilitySlotRepository.save(booked);
+
+        // Remainder AFTER the booking window
+        if (bookEnd.isBefore(slot.getEndDateTime())) {
+            AvailabilitySlot after = AvailabilitySlot.builder()
+                    .interviewer(slot.getInterviewer())
+                    .startDateTime(bookEnd)
+                    .endDateTime(slot.getEndDateTime())
+                    .status(SlotStatus.AVAILABLE)
+                    .description(slot.getDescription())
+                    .isActive(true)
+                    .build();
+            availabilitySlotRepository.save(after);
+        }
+
+        return booked;
+    }
+
+    // ── Read operations ──────────────────────────────────────────────────────
 
     public List<InterviewRequestDto> getRequestsByUser(Long userId) {
         return interviewRequestRepository.findByRequestedById(userId)
@@ -163,7 +208,8 @@ public class InterviewRequestService {
     }
 
     public List<InterviewRequestDto> getUpcomingInterviewsForInterviewer(Long interviewerId) {
-        return interviewRequestRepository.findUpcomingInterviewsForInterviewer(interviewerId, LocalDateTime.now())
+        return interviewRequestRepository
+                .findUpcomingInterviewsForInterviewer(interviewerId, LocalDateTime.now())
                 .stream().map(InterviewRequestDto::from).collect(Collectors.toList());
     }
 
@@ -172,8 +218,11 @@ public class InterviewRequestService {
                 .stream().map(InterviewRequestDto::from).collect(Collectors.toList());
     }
 
+    // ── Mutations ────────────────────────────────────────────────────────────
+
     @Transactional
-    public InterviewRequestDto respondToRequest(User interviewer, Long requestId, String action, String notes) {
+    public InterviewRequestDto respondToRequest(User interviewer, Long requestId,
+                                                String action, String notes) {
         InterviewRequest request = interviewRequestRepository.findById(requestId)
                 .orElseThrow(() -> new RuntimeException("Request not found: " + requestId));
 
@@ -207,6 +256,7 @@ public class InterviewRequestService {
         if (request.getAvailabilitySlot() != null) {
             AvailabilitySlot slot = request.getAvailabilitySlot();
             slot.setStatus(SlotStatus.AVAILABLE);
+            slot.setDescription(null);
             availabilitySlotRepository.save(slot);
         }
 

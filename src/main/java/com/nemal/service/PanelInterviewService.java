@@ -50,14 +50,8 @@ public class PanelInterviewService {
 
     /**
      * Creates a panel interview: one candidate, multiple interviewers, same time window.
-     *
-     * For each selected interviewer slot:
-     *   1. Validates the slot is AVAILABLE
-     *   2. Applies slot splitting (same as single booking)
-     *   3. Creates an InterviewRequest linked to the panel
-     *   4. Notifies each interviewer
-     *
-     * All interviewers must have overlapping availability that covers startDateTime–endDateTime.
+     * For each slot: splits it around the booking window and links the new BOOKED portion
+     * to the created InterviewRequest so both HR and interviewer calendars show it correctly.
      */
     @Transactional
     public InterviewPanelDto createPanelInterview(User requestedBy, CreatePanelInterviewDto dto) {
@@ -75,7 +69,6 @@ public class PanelInterviewService {
             candidate = candidateRepository.findById(dto.candidateId())
                     .orElseThrow(() -> new RuntimeException("Candidate not found"));
         }
-
         String candidateName = candidate != null ? candidate.getName() : dto.candidateName();
         if (candidateName == null || candidateName.trim().isEmpty()) {
             throw new RuntimeException("Candidate name is required");
@@ -103,7 +96,6 @@ public class PanelInterviewService {
                         throw new RuntimeException(
                                 "Slot for " + slot.getInterviewer().getFullName() + " is no longer available");
                     }
-                    // Validate booking window fits within this slot
                     if (dto.startDateTime().isBefore(slot.getStartDateTime())) {
                         throw new RuntimeException(
                                 "Panel start time is before " + slot.getInterviewer().getFullName() + "'s slot start");
@@ -130,22 +122,24 @@ public class PanelInterviewService {
         logger.info("Created InterviewPanel ID={}", panel.getId());
 
         // --- 6. For each slot: split + create request ---
-        for (AvailabilitySlot slot : slots) {
-            // Apply slot splitting
-            splitSlot(slot, dto.startDateTime(), dto.endDateTime());
+        Designation finalDesignation = designation;
+        String finalCandidateName = candidateName;
+        Set<Technology> finalTechnologies = technologies;
 
-            // Create interview request linked to this panel
-            Designation finalDesignation = designation;
+        for (AvailabilitySlot slot : slots) {
+            // Split and get the active BOOKED slot
+            AvailabilitySlot bookedSlot = splitSlot(slot, dto.startDateTime(), dto.endDateTime(), finalCandidateName);
+
             InterviewRequest request = InterviewRequest.builder()
-                    .candidateName(candidateName)
+                    .candidateName(finalCandidateName)
                     .candidate(candidate)
                     .candidateDesignation(finalDesignation)
-                    .requiredTechnologies(new HashSet<>(technologies))
+                    .requiredTechnologies(new HashSet<>(finalTechnologies))
                     .preferredStartDateTime(dto.startDateTime())
                     .preferredEndDateTime(dto.endDateTime())
                     .requestedBy(requestedBy)
                     .assignedInterviewer(slot.getInterviewer())
-                    .availabilitySlot(slot)
+                    .availabilitySlot(bookedSlot)      // ← link to the active BOOKED slot
                     .panel(panel)
                     .status(RequestStatus.ACCEPTED)
                     .respondedAt(LocalDateTime.now())
@@ -155,14 +149,14 @@ public class PanelInterviewService {
                     .build();
 
             request = requestRepository.save(request);
-            logger.info("Created panel request ID={} for interviewer {}", request.getId(),
-                    slot.getInterviewer().getFullName());
+            logger.info("Created panel request ID={} for interviewer {}",
+                    request.getId(), slot.getInterviewer().getFullName());
 
-            // Notify each interviewer
             try {
                 notificationService.sendInterviewScheduledNotification(request);
             } catch (Exception e) {
-                logger.error("Failed to send notification to {}: {}", slot.getInterviewer().getFullName(), e.getMessage());
+                logger.error("Failed to send notification to {}: {}",
+                        slot.getInterviewer().getFullName(), e.getMessage());
             }
         }
 
@@ -172,14 +166,13 @@ public class PanelInterviewService {
             candidateRepository.save(candidate);
         }
 
-        // Reload panel with all requests populated
         InterviewPanel savedPanel = panelRepository.findByIdWithDetails(panel.getId())
                 .orElseThrow(() -> new RuntimeException("Panel not found after save"));
         return InterviewPanelDto.from(savedPanel);
     }
 
     /**
-     * Cancels all requests in a panel and restores all slots to AVAILABLE.
+     * Cancels all requests in a panel and marks their booked slots back to AVAILABLE.
      */
     @Transactional
     public void cancelPanelInterview(User hrUser, Long panelId) {
@@ -195,6 +188,7 @@ public class PanelInterviewService {
                 AvailabilitySlot slot = request.getAvailabilitySlot();
                 if (slot != null) {
                     slot.setStatus(SlotStatus.AVAILABLE);
+                    slot.setDescription(null);
                     slotRepository.save(slot);
                 }
                 request.setStatus(RequestStatus.CANCELLED);
@@ -208,42 +202,58 @@ public class PanelInterviewService {
             }
         }
 
-        // Revert candidate status if all interviews are cancelled
         if (panel.getCandidate() != null) {
             panel.getCandidate().setStatus(CandidateStatus.SCREENING);
             candidateRepository.save(panel.getCandidate());
         }
 
-        logger.info("Cancelled panel {} with {} requests", panelId, panel.getPanelRequests().size());
+        logger.info("Cancelled panel {} with {} requests",
+                panelId, panel.getPanelRequests().size());
     }
 
     public List<InterviewPanelDto> getPanelsByCandidateId(Long candidateId) {
         return panelRepository.findByCandidateId(candidateId)
-                .stream()
-                .map(InterviewPanelDto::from)
-                .collect(Collectors.toList());
+                .stream().map(InterviewPanelDto::from).collect(Collectors.toList());
     }
 
     public List<InterviewPanelDto> getPanelsByRequestedBy(Long userId) {
         return panelRepository.findByRequestedById(userId)
-                .stream()
-                .map(InterviewPanelDto::from)
-                .collect(Collectors.toList());
+                .stream().map(InterviewPanelDto::from).collect(Collectors.toList());
     }
 
     /**
-     * Splits an availability slot around a booking window.
+     * Splits an availability slot around a booking window and returns the active BOOKED slot.
      *
-     * Before: [slotStart ————————————————— slotEnd]
-     * Book:             [bookStart — bookEnd]
-     * After:  [slotStart — bookStart] [bookStart — bookEnd] [bookEnd — slotEnd]
-     *              (AVAILABLE)              (BOOKED)            (AVAILABLE)
+     * <pre>
+     * Full booking:
+     *   Original slot → status BOOKED, description updated, returned as-is
+     *
+     * Partial booking:
+     *   Before:  [slotStart ─────────────────────── slotEnd]
+     *   After:   [slotStart─bookStart) AVAILABLE
+     *            [bookStart─bookEnd]   BOOKED  ← returned
+     *            (bookEnd─slotEnd]     AVAILABLE
+     * </pre>
      */
-    private void splitSlot(AvailabilitySlot slot, LocalDateTime bookStart, LocalDateTime bookEnd) {
+    private AvailabilitySlot splitSlot(AvailabilitySlot slot,
+                                       LocalDateTime bookStart,
+                                       LocalDateTime bookEnd,
+                                       String candidateName) {
         LocalDateTime slotStart = slot.getStartDateTime();
         LocalDateTime slotEnd = slot.getEndDateTime();
+        boolean isFullBooking = bookStart.equals(slotStart) && bookEnd.equals(slotEnd);
 
-        // Prefix: time before booking window
+        if (isFullBooking) {
+            slot.setStatus(SlotStatus.BOOKED);
+            slot.setDescription("Panel Interview: " + candidateName);
+            return slotRepository.save(slot);
+        }
+
+        // Partial booking — deactivate original
+        slot.setActive(false);
+        slotRepository.save(slot);
+
+        // Prefix
         if (bookStart.isAfter(slotStart)) {
             AvailabilitySlot prefix = AvailabilitySlot.builder()
                     .interviewer(slot.getInterviewer())
@@ -258,7 +268,20 @@ public class PanelInterviewService {
                     slotStart, bookStart, slot.getInterviewer().getFullName());
         }
 
-        // Suffix: time after booking window
+        // Booked window
+        AvailabilitySlot bookedSlot = AvailabilitySlot.builder()
+                .interviewer(slot.getInterviewer())
+                .startDateTime(bookStart)
+                .endDateTime(bookEnd)
+                .description("Panel Interview: " + candidateName)
+                .status(SlotStatus.BOOKED)
+                .isActive(true)
+                .build();
+        bookedSlot = slotRepository.save(bookedSlot);
+        logger.info("Created BOOKED slot {} – {} for {}",
+                bookStart, bookEnd, slot.getInterviewer().getFullName());
+
+        // Suffix
         if (bookEnd.isBefore(slotEnd)) {
             AvailabilitySlot suffix = AvailabilitySlot.builder()
                     .interviewer(slot.getInterviewer())
@@ -273,11 +296,6 @@ public class PanelInterviewService {
                     bookEnd, slotEnd, slot.getInterviewer().getFullName());
         }
 
-        // Original slot → trimmed to booked window
-        slot.setStartDateTime(bookStart);
-        slot.setEndDateTime(bookEnd);
-        slot.setStatus(SlotStatus.BOOKED);
-        slotRepository.save(slot);
-        logger.info("Slot {} trimmed to {} – {} (BOOKED)", slot.getId(), bookStart, bookEnd);
+        return bookedSlot;
     }
 }

@@ -18,7 +18,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -34,39 +33,32 @@ public class HRAvailabilityService {
         this.availabilitySlotRepository = availabilitySlotRepository;
     }
 
+    /**
+     * Returns ALL active slots (AVAILABLE + BOOKED) so the HR calendar shows
+     * the full picture – available slots for scheduling and booked slots
+     * (greyed out / coloured differently) for awareness.
+     */
     @Transactional
     public List<InterviewerAvailabilityDto> getAllAvailableSlots(AvailabilityFilterDto filter) {
         try {
             List<AvailabilitySlot> slots;
             LocalDateTime now = LocalDateTime.now();
 
-            logger.info("=== FILTER REQUEST START ===");
+            logger.info("=== HR AVAILABILITY FILTER REQUEST ===");
             logger.info("Filter: {}", filter);
 
-            // Enable debug for this transaction
-            org.slf4j.Logger rootLogger = org.slf4j.LoggerFactory.getLogger("com.nemal.service.HRAvailabilityService");
-            if (rootLogger instanceof ch.qos.logback.classic.Logger) {
-                ch.qos.logback.classic.Logger logbackLogger = (ch.qos.logback.classic.Logger) rootLogger;
-                ch.qos.logback.classic.Level originalLevel = logbackLogger.getLevel();
-                logbackLogger.setLevel(ch.qos.logback.classic.Level.DEBUG);
-                logger.debug("DEBUG logging enabled for this request");
-            }
-
             if (filter == null) {
-                slots = availabilitySlotRepository.findAllAvailableSlots(now);
+                slots = availabilitySlotRepository.findAllActiveSlotsForHR(now);
             } else {
                 slots = filterSlots(filter, now);
             }
 
-            logger.info("Final result: {} slots", slots.size());
-            logger.info("=== FILTER REQUEST END ===");
+            logger.info("Total slots (available + booked): {}", slots.size());
 
-            // Convert to DTOs with error handling for each slot
             List<InterviewerAvailabilityDto> result = new ArrayList<>();
             for (AvailabilitySlot slot : slots) {
                 try {
-                    InterviewerAvailabilityDto dto = InterviewerAvailabilityDto.from(slot);
-                    result.add(dto);
+                    result.add(InterviewerAvailabilityDto.from(slot));
                 } catch (Exception e) {
                     logger.error("Error converting slot {} to DTO: {}", slot.getId(), e.getMessage(), e);
                 }
@@ -84,208 +76,122 @@ public class HRAvailabilityService {
         List<AvailabilitySlot> slots;
 
         try {
-            // DO NOT clear entity manager - it causes collections to be re-lazy-loaded
-            // entityManager.clear();
-
-            // First apply date range if provided
+            // Step 1 – date range
             if (filter.startDateTime() != null && filter.endDateTime() != null) {
                 logger.info("Filtering by date range: {} to {}", filter.startDateTime(), filter.endDateTime());
-                slots = availabilitySlotRepository.findAllAvailableSlotsByDateRange(
+                slots = availabilitySlotRepository.findAllActiveSlotsForHRByDateRange(
                         filter.startDateTime(), filter.endDateTime());
             } else {
-                logger.info("Fetching all available slots from now: {}", now);
-                slots = availabilitySlotRepository.findAllAvailableSlots(now);
+                slots = availabilitySlotRepository.findAllActiveSlotsForHR(now);
             }
+            logger.info("Step 1 – initial slots: {}", slots.size());
 
-            logger.info("Step 1 - Initial slots: {}", slots.size());
-
-            // Apply department filter
+            // Step 2 – department
             if (filter.departmentIds() != null && !filter.departmentIds().isEmpty()) {
-                logger.info("Step 2 - Filtering by departments: {}", filter.departmentIds());
                 slots = slots.stream()
                         .filter(slot -> {
-                            if (slot.getInterviewer() == null || slot.getInterviewer().getDepartment() == null) {
+                            if (slot.getInterviewer() == null || slot.getInterviewer().getDepartment() == null)
                                 return false;
-                            }
                             return filter.departmentIds().contains(slot.getInterviewer().getDepartment().getId());
                         })
                         .collect(Collectors.toList());
-                logger.info("Step 2 - After department filter: {} slots", slots.size());
+                logger.info("Step 2 – after department filter: {}", slots.size());
             }
 
-            // Apply technology filter - FIXED WITH DEBUG
+            // Step 3 – technology (only applies to AVAILABLE slots for filtering;
+            //          BOOKED slots are kept as-is so HR can see who is busy)
             if (filter.technologyIds() != null && !filter.technologyIds().isEmpty()) {
-                logger.info("Step 3 - Filtering by technologies: {}", filter.technologyIds());
                 slots = slots.stream()
                         .filter(slot -> {
-                            if (slot.getInterviewer() == null) {
-                                logger.debug("  Slot {} - SKIP: No interviewer", slot.getId());
-                                return false;
-                            }
+                            // Always keep BOOKED slots in the result
+                            if ("BOOKED".equals(slot.getStatus().name())) return true;
 
-                            // Force initialization of the collection
-                            Set<InterviewerTechnology> interviewerTechs = slot.getInterviewer().getInterviewerTechnologies();
+                            if (slot.getInterviewer() == null) return false;
 
-                            // Initialize if lazy loaded
+                            var interviewerTechs = slot.getInterviewer().getInterviewerTechnologies();
                             if (!Hibernate.isInitialized(interviewerTechs)) {
-                                logger.debug("  Slot {} - Initializing interviewer technologies (lazy)", slot.getId());
                                 Hibernate.initialize(interviewerTechs);
                             }
+                            if (interviewerTechs == null || interviewerTechs.isEmpty()) return false;
 
-                            logger.debug("  Slot {} - Interviewer {} has {} technologies",
-                                    slot.getId(),
-                                    slot.getInterviewer().getId(),
-                                    interviewerTechs != null ? interviewerTechs.size() : 0);
-
-                            if (interviewerTechs == null || interviewerTechs.isEmpty()) {
-                                logger.debug("  Slot {} - SKIP: No technologies", slot.getId());
-                                return false;
-                            }
-
-                            // Log what technologies this interviewer has
-                            List<Long> interviewerTechIds = interviewerTechs.stream()
-                                    .filter(it -> it != null && it.isActive() && it.getTechnology() != null)
-                                    .map(it -> {
-                                        Long techId = it.getTechnology().getId();
-                                        logger.debug("    - Has tech ID: {} ({})", techId, it.getTechnology().getName());
-                                        return techId;
-                                    })
-                                    .collect(Collectors.toList());
-
-                            logger.debug("  Slot {} - Interviewer tech IDs: {}", slot.getId(), interviewerTechIds);
-                            logger.debug("  Slot {} - Required tech IDs: {}", slot.getId(), filter.technologyIds());
-
-                            boolean hasTechnology = interviewerTechs.stream()
+                            return interviewerTechs.stream()
                                     .filter(it -> it != null && it.isActive() && it.getTechnology() != null)
                                     .anyMatch(it -> filter.technologyIds().contains(it.getTechnology().getId()));
-
-                            if (!hasTechnology) {
-                                logger.debug("  Slot {} - SKIP: No matching technology", slot.getId());
-                                return false;
-                            }
-
-                            logger.debug("  Slot {} - PASS: Has matching technology", slot.getId());
-                            return true;
                         })
                         .collect(Collectors.toList());
-                logger.info("Step 3 - After technology filter: {} slots", slots.size());
+                logger.info("Step 3 – after technology filter: {}", slots.size());
             }
 
-            // Apply years of experience filter
+            // Step 4 – years of experience (skip BOOKED)
             if (filter.minYearsOfExperience() != null) {
-                logger.info("Step 4 - Filtering by min experience: {}", filter.minYearsOfExperience());
                 slots = slots.stream()
                         .filter(slot -> {
+                            if ("BOOKED".equals(slot.getStatus().name())) return true;
                             if (slot.getInterviewer() == null) return false;
                             Integer years = slot.getInterviewer().getYearsOfExperience();
-                            if (years == null) return false;
-                            return years >= filter.minYearsOfExperience();
+                            return years != null && years >= filter.minYearsOfExperience();
                         })
                         .collect(Collectors.toList());
-                logger.info("Step 4 - After experience filter: {} slots", slots.size());
+                logger.info("Step 4 – after experience filter: {}", slots.size());
             }
 
-            // Apply tier + level hierarchy filter (ONLY if departmentIdForDesignationFilter is set)
+            // Step 5 – tier / level hierarchy (skip BOOKED)
             if (filter.minTierId() != null && filter.departmentIdForDesignationFilter() != null) {
-                logger.info("Step 5 - Filtering by tier/level hierarchy");
-                logger.info("  Department: {}", filter.departmentIdForDesignationFilter());
-                logger.info("  Min Tier Order: {}", filter.minTierId());
-                logger.info("  Min Level Order: {}", filter.minDesignationLevelInDepartment());
-
-                // Convert Long to int if needed
                 final int minTierOrder = filter.minTierId().intValue();
                 final int minLevelOrder = filter.minDesignationLevelInDepartment() != null
                         ? filter.minDesignationLevelInDepartment().intValue()
                         : Integer.MAX_VALUE;
 
                 List<AvailabilitySlot> passedSlots = new ArrayList<>();
-
                 for (AvailabilitySlot slot : slots) {
+                    if ("BOOKED".equals(slot.getStatus().name())) {
+                        passedSlots.add(slot);
+                        continue;
+                    }
                     try {
-                        if (slot.getInterviewer() == null || slot.getInterviewer().getCurrentDesignation() == null) {
-                            logger.debug("  Slot {} - SKIP: No designation", slot.getId());
-                            continue;
-                        }
+                        if (slot.getInterviewer() == null
+                                || slot.getInterviewer().getCurrentDesignation() == null) continue;
+
+                        if (slot.getInterviewer().getDepartment() == null
+                                || !slot.getInterviewer().getDepartment().getId()
+                                .equals(filter.departmentIdForDesignationFilter())) continue;
 
                         Designation designation = slot.getInterviewer().getCurrentDesignation();
-
-                        // Check department match
-                        if (slot.getInterviewer().getDepartment() == null ||
-                                !slot.getInterviewer().getDepartment().getId()
-                                        .equals(filter.departmentIdForDesignationFilter())) {
-                            logger.debug("  Slot {} - SKIP: Wrong department", slot.getId());
-                            continue;
-                        }
-
                         Tier tier = designation.getTier();
-                        if (tier == null || tier.getTierOrder() == null || designation.getLevelOrder() == null) {
-                            logger.debug("  Slot {} - SKIP: Invalid tier/level", slot.getId());
-                            continue;
-                        }
+                        if (tier == null || tier.getTierOrder() == null
+                                || designation.getLevelOrder() == null) continue;
 
-                        int interviewerTierOrder = tier.getTierOrder();
-                        int interviewerLevelOrder = designation.getLevelOrder();
+                        int intTier = tier.getTierOrder();
+                        int intLevel = designation.getLevelOrder();
 
-                        logger.debug("  Slot {} - Interviewer: Tier {} Level {}",
-                                slot.getId(), interviewerTierOrder, interviewerLevelOrder);
-                        logger.debug("    Required: Tier {} Level {}", minTierOrder, minLevelOrder);
+                        boolean passes = intTier < minTierOrder
+                                || (intTier == minTierOrder && intLevel <= minLevelOrder);
 
-                        boolean passes = false;
-
-                        if (interviewerTierOrder < minTierOrder) {
-                            // Higher tier (lower number)
-                            passes = true;
-                            logger.debug("    → ✓ PASS: Higher tier");
-                        } else if (interviewerTierOrder == minTierOrder) {
-                            // Same tier - check level
-                            if (interviewerLevelOrder <= minLevelOrder) {
-                                passes = true;
-                                logger.debug("    → ✓ PASS: Same tier, sufficient level");
-                            } else {
-                                logger.debug("    → ✗ FAIL: Same tier, insufficient level");
-                            }
-                        } else {
-                            // Lower tier (higher number)
-                            logger.debug("    → ✗ FAIL: Lower tier");
-                        }
-
-                        if (passes) {
-                            passedSlots.add(slot);
-                        }
-
+                        if (passes) passedSlots.add(slot);
                     } catch (Exception e) {
                         logger.error("Error checking tier for slot {}: {}", slot.getId(), e.getMessage());
                     }
                 }
-
                 slots = passedSlots;
-                logger.info("Step 5 - After tier/level filter: {} slots", slots.size());
-            }
-            // If only level specified (no tier)
-            else if (filter.minDesignationLevelInDepartment() != null &&
-                    filter.departmentIdForDesignationFilter() != null) {
-                logger.info("Step 5 - Filtering by level only: {}", filter.minDesignationLevelInDepartment());
+                logger.info("Step 5 – after tier/level filter: {}", slots.size());
+
+            } else if (filter.minDesignationLevelInDepartment() != null
+                    && filter.departmentIdForDesignationFilter() != null) {
 
                 final int minLevel = filter.minDesignationLevelInDepartment().intValue();
-
                 slots = slots.stream()
                         .filter(slot -> {
-                            if (slot.getInterviewer() == null ||
-                                    slot.getInterviewer().getCurrentDesignation() == null) {
-                                return false;
-                            }
-
-                            if (slot.getInterviewer().getDepartment() == null ||
-                                    !slot.getInterviewer().getDepartment().getId()
-                                            .equals(filter.departmentIdForDesignationFilter())) {
-                                return false;
-                            }
-
+                            if ("BOOKED".equals(slot.getStatus().name())) return true;
+                            if (slot.getInterviewer() == null
+                                    || slot.getInterviewer().getCurrentDesignation() == null) return false;
+                            if (slot.getInterviewer().getDepartment() == null
+                                    || !slot.getInterviewer().getDepartment().getId()
+                                    .equals(filter.departmentIdForDesignationFilter())) return false;
                             Integer level = slot.getInterviewer().getCurrentDesignation().getLevelOrder();
                             return level != null && level <= minLevel;
                         })
                         .collect(Collectors.toList());
-                logger.info("Step 5 - After level filter: {} slots", slots.size());
+                logger.info("Step 5 – after level filter: {}", slots.size());
             }
 
             return slots;
