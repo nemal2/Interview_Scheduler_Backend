@@ -4,6 +4,7 @@ import com.nemal.dto.CreatePanelInterviewDto;
 import com.nemal.dto.InterviewPanelDto;
 import com.nemal.entity.*;
 import com.nemal.enums.CandidateStatus;
+import com.nemal.enums.InterviewStatus;
 import com.nemal.enums.RequestStatus;
 import com.nemal.enums.SlotStatus;
 import com.nemal.repository.*;
@@ -26,6 +27,7 @@ public class PanelInterviewService {
     private final InterviewPanelRepository panelRepository;
     private final AvailabilitySlotRepository slotRepository;
     private final InterviewRequestRepository requestRepository;
+    private final InterviewScheduleRepository scheduleRepository;
     private final CandidateRepository candidateRepository;
     private final DesignationRepository designationRepository;
     private final TechnologyRepository technologyRepository;
@@ -35,6 +37,7 @@ public class PanelInterviewService {
             InterviewPanelRepository panelRepository,
             AvailabilitySlotRepository slotRepository,
             InterviewRequestRepository requestRepository,
+            InterviewScheduleRepository scheduleRepository,
             CandidateRepository candidateRepository,
             DesignationRepository designationRepository,
             TechnologyRepository technologyRepository,
@@ -42,28 +45,22 @@ public class PanelInterviewService {
         this.panelRepository = panelRepository;
         this.slotRepository = slotRepository;
         this.requestRepository = requestRepository;
+        this.scheduleRepository = scheduleRepository;
         this.candidateRepository = candidateRepository;
         this.designationRepository = designationRepository;
         this.technologyRepository = technologyRepository;
         this.notificationService = notificationService;
     }
 
-    /**
-     * Creates a panel interview: one candidate, multiple interviewers, same time window.
-     * For each slot: splits it around the booking window and links the new BOOKED portion
-     * to the created InterviewRequest so both HR and interviewer calendars show it correctly.
-     */
     @Transactional
     public InterviewPanelDto createPanelInterview(User requestedBy, CreatePanelInterviewDto dto) {
-        logger.info("Creating panel interview: candidate='{}', {} interviewers, {} to {}",
-                dto.candidateName(), dto.availabilitySlotIds().size(),
-                dto.startDateTime(), dto.endDateTime());
+        logger.info("Creating panel interview: candidate='{}', {} interviewers",
+                dto.candidateName(), dto.availabilitySlotIds().size());
 
         if (dto.availabilitySlotIds() == null || dto.availabilitySlotIds().isEmpty()) {
             throw new RuntimeException("At least one interviewer slot must be selected for a panel");
         }
 
-        // --- 1. Resolve candidate ---
         Candidate candidate = null;
         if (dto.candidateId() != null) {
             candidate = candidateRepository.findById(dto.candidateId())
@@ -74,41 +71,35 @@ public class PanelInterviewService {
             throw new RuntimeException("Candidate name is required");
         }
 
-        // --- 2. Resolve designation ---
         Designation designation = null;
         if (dto.candidateDesignationId() != null) {
             designation = designationRepository.findById(dto.candidateDesignationId())
                     .orElseThrow(() -> new RuntimeException("Designation not found"));
         }
 
-        // --- 3. Resolve technologies ---
         Set<Technology> technologies = new HashSet<>();
         if (dto.requiredTechnologyIds() != null && !dto.requiredTechnologyIds().isEmpty()) {
             technologies = new HashSet<>(technologyRepository.findAllById(dto.requiredTechnologyIds()));
         }
 
-        // --- 4. Validate ALL slots before creating anything (all-or-nothing) ---
+        // Validate all slots before creating anything
         List<AvailabilitySlot> slots = dto.availabilitySlotIds().stream()
                 .map(slotId -> {
                     AvailabilitySlot slot = slotRepository.findById(slotId)
                             .orElseThrow(() -> new RuntimeException("Slot not found: " + slotId));
                     if (slot.getStatus() != SlotStatus.AVAILABLE) {
-                        throw new RuntimeException(
-                                "Slot for " + slot.getInterviewer().getFullName() + " is no longer available");
+                        throw new RuntimeException("Slot for " + slot.getInterviewer().getFullName() + " is no longer available");
                     }
                     if (dto.startDateTime().isBefore(slot.getStartDateTime())) {
-                        throw new RuntimeException(
-                                "Panel start time is before " + slot.getInterviewer().getFullName() + "'s slot start");
+                        throw new RuntimeException("Panel start time is before " + slot.getInterviewer().getFullName() + "'s slot start");
                     }
                     if (dto.endDateTime().isAfter(slot.getEndDateTime())) {
-                        throw new RuntimeException(
-                                "Panel end time is after " + slot.getInterviewer().getFullName() + "'s slot end");
+                        throw new RuntimeException("Panel end time is after " + slot.getInterviewer().getFullName() + "'s slot end");
                     }
                     return slot;
                 })
                 .collect(Collectors.toList());
 
-        // --- 5. Create the InterviewPanel record ---
         InterviewPanel panel = InterviewPanel.builder()
                 .candidate(candidate)
                 .candidateName(candidateName)
@@ -119,15 +110,12 @@ public class PanelInterviewService {
                 .notes(dto.notes())
                 .build();
         panel = panelRepository.save(panel);
-        logger.info("Created InterviewPanel ID={}", panel.getId());
 
-        // --- 6. For each slot: split + create request ---
         Designation finalDesignation = designation;
         String finalCandidateName = candidateName;
         Set<Technology> finalTechnologies = technologies;
 
         for (AvailabilitySlot slot : slots) {
-            // Split and get the active BOOKED slot
             AvailabilitySlot bookedSlot = splitSlot(slot, dto.startDateTime(), dto.endDateTime(), finalCandidateName);
 
             InterviewRequest request = InterviewRequest.builder()
@@ -139,7 +127,7 @@ public class PanelInterviewService {
                     .preferredEndDateTime(dto.endDateTime())
                     .requestedBy(requestedBy)
                     .assignedInterviewer(slot.getInterviewer())
-                    .availabilitySlot(bookedSlot)      // ← link to the active BOOKED slot
+                    .availabilitySlot(bookedSlot)
                     .panel(panel)
                     .status(RequestStatus.ACCEPTED)
                     .respondedAt(LocalDateTime.now())
@@ -149,18 +137,27 @@ public class PanelInterviewService {
                     .build();
 
             request = requestRepository.save(request);
-            logger.info("Created panel request ID={} for interviewer {}",
-                    request.getId(), slot.getInterviewer().getFullName());
+
+            // Create InterviewSchedule and link back to slot
+            InterviewSchedule schedule = InterviewSchedule.builder()
+                    .request(request)
+                    .interviewer(slot.getInterviewer())
+                    .startDateTime(dto.startDateTime())
+                    .endDateTime(dto.endDateTime())
+                    .status(InterviewStatus.SCHEDULED)
+                    .build();
+            schedule = scheduleRepository.save(schedule);
+
+            bookedSlot.setInterviewSchedule(schedule);
+            slotRepository.save(bookedSlot);
 
             try {
                 notificationService.sendInterviewScheduledNotification(request);
             } catch (Exception e) {
-                logger.error("Failed to send notification to {}: {}",
-                        slot.getInterviewer().getFullName(), e.getMessage());
+                logger.warn("Failed to send scheduled notification to {}: {}", slot.getInterviewer().getFullName(), e.getMessage());
             }
         }
 
-        // --- 7. Update candidate status ---
         if (candidate != null) {
             candidate.setStatus(CandidateStatus.SCHEDULED);
             candidateRepository.save(candidate);
@@ -172,7 +169,12 @@ public class PanelInterviewService {
     }
 
     /**
-     * Cancels all requests in a panel and marks their booked slots back to AVAILABLE.
+     * Cancel all requests in a panel and restore every booked slot to AVAILABLE.
+     *
+     * Same three-step fix as single-interview cancel:
+     *  1. slot.setInterviewSchedule(null) — detach FK so HR calendar stops seeing it as booked
+     *  2. slot.setStatus(AVAILABLE) + slot.setActive(true) — make it visible again
+     *  3. Cancel the InterviewSchedule row
      */
     @Transactional
     public void cancelPanelInterview(User hrUser, Long panelId) {
@@ -184,31 +186,54 @@ public class PanelInterviewService {
         }
 
         for (InterviewRequest request : panel.getPanelRequests()) {
-            if (request.getStatus() == RequestStatus.ACCEPTED) {
-                AvailabilitySlot slot = request.getAvailabilitySlot();
-                if (slot != null) {
-                    slot.setStatus(SlotStatus.AVAILABLE);
-                    slot.setDescription(null);
-                    slotRepository.save(slot);
-                }
-                request.setStatus(RequestStatus.CANCELLED);
-                requestRepository.save(request);
+            if (request.getStatus() == RequestStatus.CANCELLED) continue;
 
-                try {
-                    notificationService.sendInterviewCancelledNotification(request);
-                } catch (Exception e) {
-                    logger.error("Failed to send cancellation notification: {}", e.getMessage());
-                }
+            // ── Restore the slot ────────────────────────────────────────────
+            AvailabilitySlot slot = request.getAvailabilitySlot();
+            if (slot != null) {
+                logger.info("Panel cancel: restoring slot {} for interviewer {}",
+                        slot.getId(), request.getAssignedInterviewer().getFullName());
+
+                slot.setInterviewSchedule(null);   // detach schedule link
+                slot.setStatus(SlotStatus.AVAILABLE);
+                slot.setActive(true);              // ← THE FIX
+                slot.setDescription(null);
+                slotRepository.save(slot);
+            }
+
+            // ── Cancel the InterviewSchedule ────────────────────────────────
+            scheduleRepository.findByRequestId(request.getId()).ifPresent(schedule -> {
+                schedule.setStatus(InterviewStatus.CANCELLED);
+                scheduleRepository.save(schedule);
+            });
+
+            // ── Cancel the request ──────────────────────────────────────────
+            request.setStatus(RequestStatus.CANCELLED);
+            request.setAvailabilitySlot(null);
+            requestRepository.save(request);
+
+            // ── Notify interviewer ──────────────────────────────────────────
+            try {
+                notificationService.sendInterviewCancelledNotification(request);
+            } catch (Exception e) {
+                logger.warn("Failed to send cancellation notification: {}", e.getMessage());
             }
         }
 
+        // Reset candidate status
         if (panel.getCandidate() != null) {
-            panel.getCandidate().setStatus(CandidateStatus.SCREENING);
-            candidateRepository.save(panel.getCandidate());
+            Candidate candidate = panel.getCandidate();
+            long activeCount = requestRepository.findByCandidateId(candidate.getId())
+                    .stream()
+                    .filter(r -> r.getStatus() == RequestStatus.ACCEPTED)
+                    .count();
+            if (activeCount == 0) {
+                candidate.setStatus(CandidateStatus.SCREENING);
+                candidateRepository.save(candidate);
+            }
         }
 
-        logger.info("Cancelled panel {} with {} requests",
-                panelId, panel.getPanelRequests().size());
+        logger.info("Cancelled panel {} — all slots restored", panelId);
     }
 
     public List<InterviewPanelDto> getPanelsByCandidateId(Long candidateId) {
@@ -221,20 +246,6 @@ public class PanelInterviewService {
                 .stream().map(InterviewPanelDto::from).collect(Collectors.toList());
     }
 
-    /**
-     * Splits an availability slot around a booking window and returns the active BOOKED slot.
-     *
-     * <pre>
-     * Full booking:
-     *   Original slot → status BOOKED, description updated, returned as-is
-     *
-     * Partial booking:
-     *   Before:  [slotStart ─────────────────────── slotEnd]
-     *   After:   [slotStart─bookStart) AVAILABLE
-     *            [bookStart─bookEnd]   BOOKED  ← returned
-     *            (bookEnd─slotEnd]     AVAILABLE
-     * </pre>
-     */
     private AvailabilitySlot splitSlot(AvailabilitySlot slot,
                                        LocalDateTime bookStart,
                                        LocalDateTime bookEnd,
@@ -249,53 +260,32 @@ public class PanelInterviewService {
             return slotRepository.save(slot);
         }
 
-        // Partial booking — deactivate original
         slot.setActive(false);
         slotRepository.save(slot);
 
-        // Prefix
         if (bookStart.isAfter(slotStart)) {
-            AvailabilitySlot prefix = AvailabilitySlot.builder()
+            slotRepository.save(AvailabilitySlot.builder()
                     .interviewer(slot.getInterviewer())
-                    .startDateTime(slotStart)
-                    .endDateTime(bookStart)
+                    .startDateTime(slotStart).endDateTime(bookStart)
                     .description(slot.getDescription())
-                    .status(SlotStatus.AVAILABLE)
-                    .isActive(true)
-                    .build();
-            slotRepository.save(prefix);
-            logger.info("Split prefix: {} to {} AVAILABLE for {}",
-                    slotStart, bookStart, slot.getInterviewer().getFullName());
+                    .status(SlotStatus.AVAILABLE).isActive(true).build());
         }
 
-        // Booked window
-        AvailabilitySlot bookedSlot = AvailabilitySlot.builder()
+        AvailabilitySlot booked = AvailabilitySlot.builder()
                 .interviewer(slot.getInterviewer())
-                .startDateTime(bookStart)
-                .endDateTime(bookEnd)
+                .startDateTime(bookStart).endDateTime(bookEnd)
                 .description("Panel Interview: " + candidateName)
-                .status(SlotStatus.BOOKED)
-                .isActive(true)
-                .build();
-        bookedSlot = slotRepository.save(bookedSlot);
-        logger.info("Created BOOKED slot {} – {} for {}",
-                bookStart, bookEnd, slot.getInterviewer().getFullName());
+                .status(SlotStatus.BOOKED).isActive(true).build();
+        booked = slotRepository.save(booked);
 
-        // Suffix
         if (bookEnd.isBefore(slotEnd)) {
-            AvailabilitySlot suffix = AvailabilitySlot.builder()
+            slotRepository.save(AvailabilitySlot.builder()
                     .interviewer(slot.getInterviewer())
-                    .startDateTime(bookEnd)
-                    .endDateTime(slotEnd)
+                    .startDateTime(bookEnd).endDateTime(slotEnd)
                     .description(slot.getDescription())
-                    .status(SlotStatus.AVAILABLE)
-                    .isActive(true)
-                    .build();
-            slotRepository.save(suffix);
-            logger.info("Split suffix: {} to {} AVAILABLE for {}",
-                    bookEnd, slotEnd, slot.getInterviewer().getFullName());
+                    .status(SlotStatus.AVAILABLE).isActive(true).build());
         }
 
-        return bookedSlot;
+        return booked;
     }
 }

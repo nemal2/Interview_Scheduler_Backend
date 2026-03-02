@@ -13,15 +13,30 @@ import java.util.Set;
 
 @Entity
 @Table(name = "interview_requests")
-@Data
+@Getter
+@Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
+// ─── FIX ────────────────────────────────────────────────────────────────────
+// @Data generates hashCode() from ALL fields. When Hibernate adds this entity
+// into a HashSet (PersistentSet for InterviewPanel.panelRequests), it calls
+// hashCode() → which calls assignedInterviewer.hashCode() (User) → which calls
+// User.interviewerTechnologies.hashCode() — but Hibernate is still loading
+// that Set right now → ConcurrentModificationException.
+//
+// Fix: use only `id` for equals/hashCode.
+// ────────────────────────────────────────────────────────────────────────────
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
+@ToString(exclude = {"requestedBy", "assignedInterviewer", "candidate",
+        "candidateDesignation", "availabilitySlot", "panel",
+        "requiredTechnologies", "interviewSchedule"})
 @EntityListeners(AuditingEntityListener.class)
 public class InterviewRequest {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @EqualsAndHashCode.Include
     private Long id;
 
     // The candidate's name (can be freeform or from Candidate record)
@@ -84,8 +99,6 @@ public class InterviewRequest {
     @Column(length = 2000)
     private String notes;
 
-
-    // REPLACE with (if you want to navigate from request → schedule):
     @OneToOne(mappedBy = "request", fetch = FetchType.LAZY)
     private InterviewSchedule interviewSchedule;
 
@@ -96,11 +109,7 @@ public class InterviewRequest {
     @LastModifiedDate
     private LocalDateTime updatedAt;
 
-    public boolean isUrgent() {
-        return isUrgent;
-    }
+    public boolean isUrgent() { return isUrgent; }
 
-    public void setUrgent(boolean urgent) {
-        isUrgent = urgent;
-    }
+    public void setUrgent(boolean urgent) { isUrgent = urgent; }
 }

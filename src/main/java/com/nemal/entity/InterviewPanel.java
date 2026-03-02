@@ -12,15 +12,23 @@ import java.util.Set;
 
 @Entity
 @Table(name = "interview_panels")
-@Data
+@Getter
+@Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
+// ─── FIX ────────────────────────────────────────────────────────────────────
+// Same root cause as InterviewRequest / User. @Data's hashCode() would touch
+// panelRequests (a lazy Set) during loading → crash. Use id-only hashCode.
+// ────────────────────────────────────────────────────────────────────────────
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
+@ToString(exclude = {"panelRequests", "requestedBy", "candidate"})
 @EntityListeners(AuditingEntityListener.class)
 public class InterviewPanel {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @EqualsAndHashCode.Include
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY)
@@ -57,11 +65,7 @@ public class InterviewPanel {
     @LastModifiedDate
     private LocalDateTime updatedAt;
 
-    public boolean isUrgent() {
-        return isUrgent;
-    }
+    public boolean isUrgent() { return isUrgent; }
 
-    public void setUrgent(boolean urgent) {
-        isUrgent = urgent;
-    }
+    public void setUrgent(boolean urgent) { isUrgent = urgent; }
 }

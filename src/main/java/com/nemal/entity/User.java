@@ -18,14 +18,28 @@ import java.util.Set;
 
 @Entity
 @Table(name = "users")
-@Data
+@Getter
+@Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
+// ─── FIX ────────────────────────────────────────────────────────────────────
+// @Data generates hashCode() from ALL fields including the lazy Set
+// `interviewerTechnologies`. When Hibernate loads InterviewPanel.panelRequests
+// (a Set<InterviewRequest>), it calls InterviewRequest.hashCode() →
+// User.hashCode() → tries to load `interviewerTechnologies` while Hibernate is
+// still building that outer Set → ConcurrentModificationException.
+//
+// Solution: only use `id` for equals/hashCode. Safe, stable, correct for JPA.
+// ────────────────────────────────────────────────────────────────────────────
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
+@ToString(exclude = {"interviewerTechnologies", "currentDesignation", "department"})
 @EntityListeners(AuditingEntityListener.class)
 public class User implements UserDetails {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @EqualsAndHashCode.Include
     private Long id;
 
     @Column(unique = true, nullable = false)
@@ -58,6 +72,7 @@ public class User implements UserDetails {
 
     // NO @Where CLAUSE - Let the code filter active technologies manually
     @OneToMany(mappedBy = "interviewer", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    @Builder.Default
     private Set<InterviewerTechnology> interviewerTechnologies = new HashSet<>();
 
     private boolean isActive = true;
@@ -88,124 +103,18 @@ public class User implements UserDetails {
     }
 
     @Override
-    public boolean isAccountNonExpired() {
-        return true;
-    }
+    public boolean isAccountNonExpired() { return true; }
 
     @Override
-    public boolean isAccountNonLocked() {
-        return true;
-    }
+    public boolean isAccountNonLocked() { return true; }
 
     @Override
-    public boolean isCredentialsNonExpired() {
-        return true;
-    }
+    public boolean isCredentialsNonExpired() { return true; }
 
     @Override
-    public boolean isEnabled() {
-        return isActive;
-    }
+    public boolean isEnabled() { return isActive; }
 
-    public void setIsActive(boolean b) {
-        this.isActive = b;
-    }
-
-    public Long getId() {
-        return id;
-    }
-
-    public void setId(Long id) {
-        this.id = id;
-    }
-
-    public String getEmail() {
-        return email;
-    }
-
-    public void setEmail(String email) {
-        this.email = email;
-    }
-
-    public String getPasswordHash() {
-        return passwordHash;
-    }
-
-    public void setPasswordHash(String passwordHash) {
-        this.passwordHash = passwordHash;
-    }
-
-    public String getFirstName() {
-        return firstName;
-    }
-
-    public void setFirstName(String firstName) {
-        this.firstName = firstName;
-    }
-
-    public String getLastName() {
-        return lastName;
-    }
-
-    public void setLastName(String lastName) {
-        this.lastName = lastName;
-    }
-
-    public String getPhone() {
-        return phone;
-    }
-
-    public void setPhone(String phone) {
-        this.phone = phone;
-    }
-
-    public String getProfilePictureUrl() {
-        return profilePictureUrl;
-    }
-
-    public void setProfilePictureUrl(String profilePictureUrl) {
-        this.profilePictureUrl = profilePictureUrl;
-    }
-
-    public String getBio() {
-        return bio;
-    }
-
-    public void setBio(String bio) {
-        this.bio = bio;
-    }
-
-    public Integer getYearsOfExperience() {
-        return yearsOfExperience;
-    }
-
-    public void setYearsOfExperience(Integer yearsOfExperience) {
-        this.yearsOfExperience = yearsOfExperience;
-    }
-
-    public Role getRole() {
-        return role;
-    }
-
-    public void setRole(Role role) {
-        this.role = role;
-    }
-
-    public Department getDepartment() {
-        return department;
-    }
-
-    public void setDepartment(Department department) {
-        this.department = department;
-    }
-
-    public Designation getCurrentDesignation() {
-        return currentDesignation;
-    }
-
-    public void setCurrentDesignation(Designation currentDesignation) {
-        this.currentDesignation = currentDesignation;
-    }
+    public void setIsActive(boolean b) { this.isActive = b; }
 
     public Set<InterviewerTechnology> getInterviewerTechnologies() {
         if (interviewerTechnologies == null) {
@@ -214,31 +123,7 @@ public class User implements UserDetails {
         return interviewerTechnologies;
     }
 
-    public void setInterviewerTechnologies(Set<InterviewerTechnology> interviewerTechnologies) {
-        this.interviewerTechnologies = interviewerTechnologies;
-    }
+    public boolean isActive() { return isActive; }
 
-    public boolean isActive() {
-        return isActive;
-    }
-
-    public void setActive(boolean active) {
-        isActive = active;
-    }
-
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(LocalDateTime createdAt) {
-        this.createdAt = createdAt;
-    }
-
-    public LocalDateTime getUpdatedAt() {
-        return updatedAt;
-    }
-
-    public void setUpdatedAt(LocalDateTime updatedAt) {
-        this.updatedAt = updatedAt;
-    }
+    public void setActive(boolean active) { isActive = active; }
 }
