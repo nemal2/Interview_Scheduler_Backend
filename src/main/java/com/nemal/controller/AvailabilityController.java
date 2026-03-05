@@ -3,6 +3,7 @@ package com.nemal.controller;
 import com.nemal.dto.AvailabilitySlotDto;
 import com.nemal.dto.BulkAvailabilitySlotDto;
 import com.nemal.dto.CreateAvailabilitySlotDto;
+import com.nemal.dto.UpdateAvailabilitySlotDto;
 import com.nemal.entity.User;
 import com.nemal.service.AvailabilityService;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -60,6 +61,25 @@ public class AvailabilityController {
     ) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(availabilityService.createBulkAvailabilitySlots(user, dto));
+    }
+
+    /**
+     * Update an existing AVAILABLE slot (interviewer only).
+     * Returns 400 if the slot is BOOKED (has a scheduled interview).
+     */
+    @PutMapping("/{slotId}")
+    public ResponseEntity<?> updateAvailabilitySlot(
+            @AuthenticationPrincipal User user,
+            @PathVariable Long slotId,
+            @RequestBody UpdateAvailabilitySlotDto dto
+    ) {
+        try {
+            AvailabilitySlotDto result = availabilityService.updateAvailabilitySlot(user, slotId, dto);
+            return ResponseEntity.ok(result);
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("message", e.getMessage()));
+        }
     }
 
     @DeleteMapping("/{slotId}")
