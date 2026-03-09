@@ -18,25 +18,43 @@ import java.util.stream.Collectors;
 @Service
 public class AvailabilityService {
 
+    /**
+     * How far back (in days) the interviewer calendar shows past slots.
+     * Booked/completed slots within this window remain visible so interviewers
+     * can review their recent history without data appearing to vanish.
+     */
+    private static final int INTERVIEWER_LOOKBACK_DAYS = 14;
+
     private final AvailabilitySlotRepository availabilitySlotRepository;
 
     public AvailabilityService(AvailabilitySlotRepository availabilitySlotRepository) {
         this.availabilitySlotRepository = availabilitySlotRepository;
     }
 
+    /**
+     * Returns all active slots for the interviewer from 14 days ago onwards.
+     * Previously this only returned future slots, causing data to "disappear"
+     * as soon as slot start times passed.
+     */
     public List<AvailabilitySlotDto> getInterviewerAvailability(User interviewer) {
-        return availabilitySlotRepository.findByInterviewerIdAndIsActiveTrue(interviewer.getId())
+        LocalDateTime from = LocalDateTime.now().minusDays(INTERVIEWER_LOOKBACK_DAYS);
+        return availabilitySlotRepository
+                .findByInterviewerIdAndIsActiveTrueWithLookback(interviewer.getId(), from)
                 .stream()
                 .map(AvailabilitySlotDto::from)
                 .collect(Collectors.toList());
     }
 
+    /**
+     * Date-range query — unchanged, the caller already specifies the window.
+     */
     public List<AvailabilitySlotDto> getInterviewerAvailabilityByDateRange(
             User interviewer,
             LocalDateTime start,
             LocalDateTime end
     ) {
-        return availabilitySlotRepository.findByInterviewerIdAndStartDateTimeBetweenAndIsActiveTrue(
+        return availabilitySlotRepository
+                .findByInterviewerIdAndStartDateTimeBetweenAndIsActiveTrue(
                         interviewer.getId(), start, end)
                 .stream()
                 .map(AvailabilitySlotDto::from)
@@ -77,7 +95,11 @@ public class AvailabilityService {
      * Only AVAILABLE (not BOOKED) slots can be edited by the interviewer.
      */
     @Transactional
-    public AvailabilitySlotDto updateAvailabilitySlot(User interviewer, Long slotId, UpdateAvailabilitySlotDto dto) {
+    public AvailabilitySlotDto updateAvailabilitySlot(
+            User interviewer,
+            Long slotId,
+            UpdateAvailabilitySlotDto dto
+    ) {
         AvailabilitySlot slot = availabilitySlotRepository.findById(slotId)
                 .orElseThrow(() -> new RuntimeException("Slot not found: " + slotId));
 
@@ -93,21 +115,21 @@ public class AvailabilityService {
             throw new RuntimeException("Cannot edit an inactive slot");
         }
 
-        if (dto.endDateTime().isBefore(dto.startDateTime()) || dto.endDateTime().isEqual(dto.startDateTime())) {
+        if (dto.endDateTime().isBefore(dto.startDateTime())
+                || dto.endDateTime().isEqual(dto.startDateTime())) {
             throw new RuntimeException("End time must be after start time");
         }
 
-        // Check for conflicts — exclude the current slot from conflict check
-        List<AvailabilitySlot> conflicts = availabilitySlotRepository.findConflictingSlots(
-                        interviewer.getId(),
-                        dto.startDateTime(),
-                        dto.endDateTime()
-                ).stream()
+        // Conflict check — exclude the current slot itself
+        List<AvailabilitySlot> conflicts = availabilitySlotRepository
+                .findConflictingSlots(interviewer.getId(), dto.startDateTime(), dto.endDateTime())
+                .stream()
                 .filter(s -> !s.getId().equals(slotId))
                 .collect(Collectors.toList());
 
         if (!conflicts.isEmpty()) {
-            throw new RuntimeException("The updated time conflicts with another existing availability slot");
+            throw new RuntimeException(
+                    "The updated time conflicts with another existing availability slot");
         }
 
         slot.setStartDateTime(dto.startDateTime());
@@ -147,11 +169,30 @@ public class AvailabilityService {
         availabilitySlotRepository.save(slot);
     }
 
+    /**
+     * Counts UPCOMING available slots only (from now, not lookback).
+     * This gives an accurate "how many future slots do I have" number on the dashboard.
+     */
     public long getAvailableSlotCount(Long interviewerId) {
-        return availabilitySlotRepository.countUpcomingAvailableSlots(interviewerId, LocalDateTime.now());
+        return availabilitySlotRepository.countAvailableSlotsFrom(
+                interviewerId, LocalDateTime.now());
     }
 
+    /**
+     * Counts UPCOMING booked slots only (from now, not lookback).
+     * Shows "how many interviews are scheduled in the future" on the dashboard.
+     */
     public long getBookedSlotCount(Long interviewerId) {
-        return availabilitySlotRepository.countUpcomingBookedSlots(interviewerId, LocalDateTime.now());
+        return availabilitySlotRepository.countBookedSlotsFrom(
+                interviewerId, LocalDateTime.now());
+    }
+
+    /**
+     * Counts booked slots in the last N days — useful for a "recent activity"
+     * dashboard widget so numbers don't drop to zero after a busy week.
+     */
+    public long getRecentBookedSlotCount(Long interviewerId, int lookbackDays) {
+        LocalDateTime from = LocalDateTime.now().minusDays(lookbackDays);
+        return availabilitySlotRepository.countBookedSlotsFrom(interviewerId, from);
     }
 }
