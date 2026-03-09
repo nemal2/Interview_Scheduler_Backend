@@ -82,7 +82,6 @@ public class PanelInterviewService {
             technologies = new HashSet<>(technologyRepository.findAllById(dto.requiredTechnologyIds()));
         }
 
-        // Validate all slots before creating anything
         List<AvailabilitySlot> slots = dto.availabilitySlotIds().stream()
                 .map(slotId -> {
                     AvailabilitySlot slot = slotRepository.findById(slotId)
@@ -138,7 +137,6 @@ public class PanelInterviewService {
 
             request = requestRepository.save(request);
 
-            // Create InterviewSchedule and link back to slot
             InterviewSchedule schedule = InterviewSchedule.builder()
                     .request(request)
                     .interviewer(slot.getInterviewer())
@@ -168,14 +166,6 @@ public class PanelInterviewService {
         return InterviewPanelDto.from(savedPanel);
     }
 
-    /**
-     * Cancel all requests in a panel and restore every booked slot to AVAILABLE.
-     *
-     * Same three-step fix as single-interview cancel:
-     *  1. slot.setInterviewSchedule(null) — detach FK so HR calendar stops seeing it as booked
-     *  2. slot.setStatus(AVAILABLE) + slot.setActive(true) — make it visible again
-     *  3. Cancel the InterviewSchedule row
-     */
     @Transactional
     public void cancelPanelInterview(User hrUser, Long panelId) {
         InterviewPanel panel = panelRepository.findByIdWithDetails(panelId)
@@ -188,31 +178,29 @@ public class PanelInterviewService {
         for (InterviewRequest request : panel.getPanelRequests()) {
             if (request.getStatus() == RequestStatus.CANCELLED) continue;
 
-            // ── Restore the slot ────────────────────────────────────────────
             AvailabilitySlot slot = request.getAvailabilitySlot();
             if (slot != null) {
                 logger.info("Panel cancel: restoring slot {} for interviewer {}",
                         slot.getId(), request.getAssignedInterviewer().getFullName());
 
-                slot.setInterviewSchedule(null);   // detach schedule link
+                slot.setInterviewSchedule(null);
                 slot.setStatus(SlotStatus.AVAILABLE);
-                slot.setActive(true);              // ← THE FIX
+                slot.setActive(true);
                 slot.setDescription(null);
                 slotRepository.save(slot);
+
+                mergeAdjacentSlots(slot);
             }
 
-            // ── Cancel the InterviewSchedule ────────────────────────────────
             scheduleRepository.findByRequestId(request.getId()).ifPresent(schedule -> {
                 schedule.setStatus(InterviewStatus.CANCELLED);
                 scheduleRepository.save(schedule);
             });
 
-            // ── Cancel the request ──────────────────────────────────────────
             request.setStatus(RequestStatus.CANCELLED);
             request.setAvailabilitySlot(null);
             requestRepository.save(request);
 
-            // ── Notify interviewer ──────────────────────────────────────────
             try {
                 notificationService.sendInterviewCancelledNotification(request);
             } catch (Exception e) {
@@ -220,7 +208,6 @@ public class PanelInterviewService {
             }
         }
 
-        // Reset candidate status
         if (panel.getCandidate() != null) {
             Candidate candidate = panel.getCandidate();
             long activeCount = requestRepository.findByCandidateId(candidate.getId())
@@ -233,17 +220,57 @@ public class PanelInterviewService {
             }
         }
 
-        logger.info("Cancelled panel {} — all slots restored", panelId);
+        logger.info("Cancelled panel {} — all slots restored and merged", panelId);
     }
 
+    // ── Read ──────────────────────────────────────────────────────────────────
+
+    @Transactional(readOnly = true)
     public List<InterviewPanelDto> getPanelsByCandidateId(Long candidateId) {
         return panelRepository.findByCandidateId(candidateId)
                 .stream().map(InterviewPanelDto::from).collect(Collectors.toList());
     }
 
+    @Transactional(readOnly = true)
     public List<InterviewPanelDto> getPanelsByRequestedBy(Long userId) {
         return panelRepository.findByRequestedById(userId)
                 .stream().map(InterviewPanelDto::from).collect(Collectors.toList());
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────────────
+
+    private void mergeAdjacentSlots(AvailabilitySlot restoredSlot) {
+        Long interviewerId = restoredSlot.getInterviewer().getId();
+        LocalDateTime mergedStart = restoredSlot.getStartDateTime();
+        LocalDateTime mergedEnd   = restoredSlot.getEndDateTime();
+        boolean changed = false;
+
+        var before = slotRepository.findActiveAvailableSlotEndingAt(interviewerId, mergedStart);
+        if (before.isPresent()) {
+            logger.info("Panel cancel: merging before-fragment slot {} → slot {}",
+                    before.get().getId(), restoredSlot.getId());
+            mergedStart = before.get().getStartDateTime();
+            before.get().setActive(false);
+            slotRepository.save(before.get());
+            changed = true;
+        }
+
+        var after = slotRepository.findActiveAvailableSlotStartingAt(interviewerId, mergedEnd);
+        if (after.isPresent()) {
+            logger.info("Panel cancel: merging after-fragment slot {} → slot {}",
+                    after.get().getId(), restoredSlot.getId());
+            mergedEnd = after.get().getEndDateTime();
+            after.get().setActive(false);
+            slotRepository.save(after.get());
+            changed = true;
+        }
+
+        if (changed) {
+            restoredSlot.setStartDateTime(mergedStart);
+            restoredSlot.setEndDateTime(mergedEnd);
+            slotRepository.save(restoredSlot);
+            logger.info("Slot {} merged → {} – {}", restoredSlot.getId(), mergedStart, mergedEnd);
+        }
     }
 
     private AvailabilitySlot splitSlot(AvailabilitySlot slot,

@@ -1,8 +1,9 @@
 package com.nemal.dto;
 
 import com.nemal.entity.AvailabilitySlot;
+import com.nemal.entity.Designation;
 import com.nemal.entity.InterviewRequest;
-import com.nemal.entity.InterviewerTechnology;
+import com.nemal.entity.Tier;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -10,7 +11,14 @@ import java.util.stream.Collectors;
 
 /**
  * DTO returned to the HR calendar.
- * Includes requestId so the frontend can cancel a BOOKED slot directly.
+ *
+ * Added in latest version:
+ *   • interviewerTierOrder  — Tier.tierOrder of the interviewer's current designation
+ *   • interviewerLevelOrder — Designation.levelOrder of the interviewer
+ *
+ * The frontend uses these two fields to enforce the privilege rule:
+ *   interviewer must be at a strictly higher tier, OR same tier + strictly higher level,
+ *   than the candidate's target designation before a booking is allowed.
  */
 public record InterviewerAvailabilityDto(
         Long slotId,
@@ -24,14 +32,16 @@ public record InterviewerAvailabilityDto(
         LocalDateTime endDateTime,
         String status,
         String candidateName,
-        Long requestId          // ← NEW: ID of the InterviewRequest that booked this slot
+        Long requestId,              // ID of the InterviewRequest that booked this slot
+        Integer interviewerTierOrder,  // NEW — Tier.tierOrder for the interviewer
+        Integer interviewerLevelOrder  // NEW — Designation.levelOrder for the interviewer
 ) {
 
     public static InterviewerAvailabilityDto from(AvailabilitySlot slot) {
+        // ── Resolve candidateName + requestId ────────────────────────────────
         String candidateName = null;
         Long requestId = null;
 
-        // Resolve candidateName + requestId from the linked schedule/request
         if (slot.getInterviewSchedule() != null) {
             InterviewRequest req = slot.getInterviewSchedule().getRequest();
             if (req != null) {
@@ -40,7 +50,7 @@ public record InterviewerAvailabilityDto(
             }
         }
 
-        // Fallback: parse "Interview: <name>" or "Panel Interview: <name>" from description
+        // Fallback: parse "Interview: <name>" / "Panel Interview: <name>" from description
         if (candidateName == null && slot.getDescription() != null) {
             String desc = slot.getDescription();
             if (desc.startsWith("Interview: ")) {
@@ -50,12 +60,29 @@ public record InterviewerAvailabilityDto(
             }
         }
 
+        // ── Technologies ─────────────────────────────────────────────────────
         List<String> techs = List.of();
-        if (slot.getInterviewer() != null && slot.getInterviewer().getInterviewerTechnologies() != null) {
+        if (slot.getInterviewer() != null
+                && slot.getInterviewer().getInterviewerTechnologies() != null) {
             techs = slot.getInterviewer().getInterviewerTechnologies().stream()
                     .filter(it -> it != null && it.isActive() && it.getTechnology() != null)
                     .map(it -> it.getTechnology().getName())
                     .collect(Collectors.toList());
+        }
+
+        // ── Tier / level for privilege check ─────────────────────────────────
+        Integer tierOrder  = null;
+        Integer levelOrder = null;
+
+        if (slot.getInterviewer() != null) {
+            Designation desig = slot.getInterviewer().getCurrentDesignation();
+            if (desig != null) {
+                levelOrder = desig.getLevelOrder();
+                Tier tier = desig.getTier();
+                if (tier != null) {
+                    tierOrder = tier.getTierOrder();
+                }
+            }
         }
 
         return new InterviewerAvailabilityDto(
@@ -72,7 +99,9 @@ public record InterviewerAvailabilityDto(
                 slot.getEndDateTime(),
                 slot.getStatus() != null ? slot.getStatus().name() : "AVAILABLE",
                 candidateName,
-                requestId
+                requestId,
+                tierOrder,    // interviewerTierOrder
+                levelOrder    // interviewerLevelOrder
         );
     }
 }

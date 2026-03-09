@@ -173,22 +173,26 @@ public class InterviewRequestService {
 
     // ── Read ──────────────────────────────────────────────────────────────────
 
+    @Transactional(readOnly = true)
     public List<InterviewRequestDto> getRequestsByUser(Long userId) {
         return interviewRequestRepository.findByRequestedById(userId)
                 .stream().map(InterviewRequestDto::from).collect(Collectors.toList());
     }
 
+    @Transactional(readOnly = true)
     public List<InterviewRequestDto> getRequestsByCandidate(Long candidateId) {
         return interviewRequestRepository.findByCandidateId(candidateId)
                 .stream().map(InterviewRequestDto::from).collect(Collectors.toList());
     }
 
+    @Transactional(readOnly = true)
     public List<InterviewRequestDto> getUpcomingInterviewsForInterviewer(Long interviewerId) {
         return interviewRequestRepository
                 .findUpcomingInterviewsForInterviewer(interviewerId, LocalDateTime.now())
                 .stream().map(InterviewRequestDto::from).collect(Collectors.toList());
     }
 
+    @Transactional(readOnly = true)
     public List<InterviewRequestDto> getInterviewsForInterviewer(Long interviewerId) {
         return interviewRequestRepository.findByAssignedInterviewerId(interviewerId)
                 .stream().map(InterviewRequestDto::from).collect(Collectors.toList());
@@ -224,18 +228,6 @@ public class InterviewRequestService {
         return InterviewRequestDto.from(interviewRequestRepository.save(request));
     }
 
-    /**
-     * Cancel an interview request (called by HR).
-     *
-     * Root causes of the previous bug:
-     *  - slot.setActive(true) was missing → slot stayed invisible in both calendars
-     *  - slot.setInterviewSchedule(null) was missing → HR calendar's JOIN FETCH
-     *    query still returned the slot as BOOKED because the schedule row existed
-     *  - InterviewSchedule was not being cancelled → interviewer dashboard still
-     *    showed the interview as SCHEDULED
-     *  - Notification was called with the *already-cancelled* request which had
-     *    a null slot → NPE swallowed silently, no notification sent
-     */
     @Transactional
     public void cancelRequest(User user, Long requestId) {
         logger.info("HR user {} cancelling request {}", user.getId(), requestId);
@@ -247,33 +239,24 @@ public class InterviewRequestService {
             throw new RuntimeException("Request is already cancelled");
         }
 
-        // Save a snapshot of the interviewer for notification BEFORE we modify anything
-        User assignedInterviewer = request.getAssignedInterviewer();
-
         // ── Step 1: Fix the AvailabilitySlot ─────────────────────────────────
         AvailabilitySlot slot = request.getAvailabilitySlot();
         if (slot != null) {
             logger.info("Slot {} current state: status={}, active={}", slot.getId(), slot.getStatus(), slot.isActive());
 
-            // Detach the InterviewSchedule FK from the slot FIRST.
-            // The HR calendar query does LEFT JOIN FETCH s.interviewSchedule sch
-            // LEFT JOIN FETCH sch.request — if the schedule link remains, the slot
-            // is still returned as "booked" even after status is changed.
             slot.setInterviewSchedule(null);
-
-            // Restore to AVAILABLE and make sure it's visible
             slot.setStatus(SlotStatus.AVAILABLE);
-            slot.setActive(true);            // ← THE PRIMARY BUG: this was missing
+            slot.setActive(true);
             slot.setDescription(null);
-
             availabilitySlotRepository.save(slot);
             logger.info("Slot {} restored: status=AVAILABLE, active=true", slot.getId());
+
+            mergeAdjacentSlots(slot);
         } else {
             logger.warn("Request {} had no linked slot — nothing to restore", requestId);
         }
 
         // ── Step 2: Cancel the InterviewSchedule ─────────────────────────────
-        // Use findByRequestId so we find it even after unlinking from the slot above.
         interviewScheduleRepository.findByRequestId(requestId).ifPresent(schedule -> {
             logger.info("Cancelling InterviewSchedule {}", schedule.getId());
             schedule.setStatus(InterviewStatus.CANCELLED);
@@ -282,14 +265,12 @@ public class InterviewRequestService {
 
         // ── Step 3: Mark request CANCELLED ───────────────────────────────────
         request.setStatus(RequestStatus.CANCELLED);
-        request.setAvailabilitySlot(null);   // unlink so nothing cascades back
+        request.setAvailabilitySlot(null);
         interviewRequestRepository.save(request);
         logger.info("Request {} marked CANCELLED", requestId);
 
         // ── Step 4: Notify interviewer ────────────────────────────────────────
-        // Build a light notification payload rather than passing the detached request
         try {
-            // Re-fetch the saved request to get a clean state for the notification
             InterviewRequest forNotification = interviewRequestRepository.findById(requestId).orElse(request);
             notificationService.sendInterviewCancelledNotification(forNotification);
             logger.info("Cancellation notification sent");
@@ -311,6 +292,44 @@ public class InterviewRequestService {
                 candidateRepository.save(candidate);
                 logger.info("Candidate {} reset to SCREENING", candidate.getId());
             }
+        }
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────────────
+
+    private void mergeAdjacentSlots(AvailabilitySlot restoredSlot) {
+        Long interviewerId = restoredSlot.getInterviewer().getId();
+        LocalDateTime mergedStart = restoredSlot.getStartDateTime();
+        LocalDateTime mergedEnd   = restoredSlot.getEndDateTime();
+        boolean changed = false;
+
+        var before = availabilitySlotRepository
+                .findActiveAvailableSlotEndingAt(interviewerId, mergedStart);
+        if (before.isPresent()) {
+            logger.info("Merging before-fragment slot {} into restored slot {}",
+                    before.get().getId(), restoredSlot.getId());
+            mergedStart = before.get().getStartDateTime();
+            before.get().setActive(false);
+            availabilitySlotRepository.save(before.get());
+            changed = true;
+        }
+
+        var after = availabilitySlotRepository
+                .findActiveAvailableSlotStartingAt(interviewerId, mergedEnd);
+        if (after.isPresent()) {
+            logger.info("Merging after-fragment slot {} into restored slot {}",
+                    after.get().getId(), restoredSlot.getId());
+            mergedEnd = after.get().getEndDateTime();
+            after.get().setActive(false);
+            availabilitySlotRepository.save(after.get());
+            changed = true;
+        }
+
+        if (changed) {
+            restoredSlot.setStartDateTime(mergedStart);
+            restoredSlot.setEndDateTime(mergedEnd);
+            availabilitySlotRepository.save(restoredSlot);
+            logger.info("Slot {} merged to window {} – {}", restoredSlot.getId(), mergedStart, mergedEnd);
         }
     }
 }
