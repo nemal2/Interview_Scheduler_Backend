@@ -24,6 +24,7 @@ public class Candidate {
     @Column(nullable = false)
     private String name;
 
+    // Stored lowercase-trimmed; global uniqueness enforced in CandidateService
     @Column(unique = true, nullable = false)
     private String email;
 
@@ -43,6 +44,18 @@ public class Candidate {
 
     @Column(length = 2000)
     private String resumeUrl;
+
+    /** Job Description URL (link to the role's JD page) */
+    @Column(name = "jd_url", length = 2000)
+    private String jdUrl;
+
+    /** Internal requisition / job reference code, e.g. REQ-2024-001 */
+    @Column(name = "job_reference_code", length = 100)
+    private String jobReferenceCode;
+
+    /** Candidate's current location / city */
+    @Column(length = 255)
+    private String location;
 
     @Column(length = 2000)
     private String notes;

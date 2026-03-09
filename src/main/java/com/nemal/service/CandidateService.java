@@ -19,24 +19,25 @@ import java.util.stream.Collectors;
 @Service
 public class CandidateService {
 
-    private final CandidateRepository candidateRepository;
+    private final CandidateRepository  candidateRepository;
     private final DepartmentRepository departmentRepository;
     private final DesignationRepository designationRepository;
 
     public CandidateService(
-            CandidateRepository candidateRepository,
+            CandidateRepository  candidateRepository,
             DepartmentRepository departmentRepository,
             DesignationRepository designationRepository
     ) {
-        this.candidateRepository = candidateRepository;
+        this.candidateRepository  = candidateRepository;
         this.departmentRepository = departmentRepository;
         this.designationRepository = designationRepository;
     }
 
+    // ── Reads ─────────────────────────────────────────────────────────────────
+
     public List<CandidateDto> getAllCandidates() {
-        return candidateRepository.findByIsActiveTrueOrderByAppliedAtDesc().stream()
-                .map(CandidateDto::from)
-                .collect(Collectors.toList());
+        return candidateRepository.findByIsActiveTrueOrderByAppliedAtDesc()
+                .stream().map(CandidateDto::from).collect(Collectors.toList());
     }
 
     public CandidateDto getCandidateById(Long id) {
@@ -47,53 +48,36 @@ public class CandidateService {
 
     public List<CandidateDto> getCandidatesByDepartment(Long departmentId) {
         return candidateRepository.findByDepartmentIdAndIsActiveTrueOrderByAppliedAtDesc(departmentId)
-                .stream()
-                .map(CandidateDto::from)
-                .collect(Collectors.toList());
+                .stream().map(CandidateDto::from).collect(Collectors.toList());
     }
 
     public List<CandidateDto> getCandidatesByStatus(CandidateStatus status) {
         return candidateRepository.findByStatusAndIsActiveTrueOrderByAppliedAtDesc(status)
-                .stream()
-                .map(CandidateDto::from)
-                .collect(Collectors.toList());
+                .stream().map(CandidateDto::from).collect(Collectors.toList());
     }
 
     public List<CandidateDto> searchCandidates(String searchTerm) {
-        return candidateRepository.searchCandidates(searchTerm).stream()
-                .map(CandidateDto::from)
-                .collect(Collectors.toList());
+        return candidateRepository.searchCandidates(searchTerm)
+                .stream().map(CandidateDto::from).collect(Collectors.toList());
     }
 
     public List<CandidateDto> findWithFilters(Long departmentId, CandidateStatus status, String searchTerm) {
         List<Candidate> candidates;
 
-        // If no filters, get all
         if (departmentId == null && status == null && (searchTerm == null || searchTerm.trim().isEmpty())) {
             candidates = candidateRepository.findByIsActiveTrueOrderByAppliedAtDesc();
-        }
-        // If only department filter
-        else if (departmentId != null && status == null && (searchTerm == null || searchTerm.trim().isEmpty())) {
+        } else if (departmentId != null && status == null && (searchTerm == null || searchTerm.trim().isEmpty())) {
             candidates = candidateRepository.findByDepartmentIdAndIsActiveTrueOrderByAppliedAtDesc(departmentId);
-        }
-        // If only status filter
-        else if (departmentId == null && status != null && (searchTerm == null || searchTerm.trim().isEmpty())) {
+        } else if (departmentId == null && status != null && (searchTerm == null || searchTerm.trim().isEmpty())) {
             candidates = candidateRepository.findByStatusAndIsActiveTrueOrderByAppliedAtDesc(status);
-        }
-        // If department and status
-        else if (departmentId != null && status != null && (searchTerm == null || searchTerm.trim().isEmpty())) {
+        } else if (departmentId != null && status != null && (searchTerm == null || searchTerm.trim().isEmpty())) {
             candidates = candidateRepository.findByDepartmentIdAndStatusAndIsActiveTrueOrderByAppliedAtDesc(departmentId, status);
-        }
-        // If search term exists, use search and then filter in memory
-        else {
-            String cleanSearchTerm = searchTerm != null ? searchTerm.trim() : "";
-            if (!cleanSearchTerm.isEmpty()) {
-                candidates = candidateRepository.searchCandidates(cleanSearchTerm);
-            } else {
-                candidates = candidateRepository.findByIsActiveTrueOrderByAppliedAtDesc();
-            }
+        } else {
+            String term = (searchTerm != null) ? searchTerm.trim() : "";
+            candidates = term.isEmpty()
+                    ? candidateRepository.findByIsActiveTrueOrderByAppliedAtDesc()
+                    : candidateRepository.searchCandidates(term);
 
-            // Apply additional filters in memory
             if (departmentId != null) {
                 final Long deptId = departmentId;
                 candidates = candidates.stream()
@@ -101,59 +85,59 @@ public class CandidateService {
                         .collect(Collectors.toList());
             }
             if (status != null) {
-                final CandidateStatus stat = status;
+                final CandidateStatus st = status;
                 candidates = candidates.stream()
-                        .filter(c -> c.getStatus() == stat)
+                        .filter(c -> c.getStatus() == st)
                         .collect(Collectors.toList());
             }
         }
 
-        return candidates.stream()
-                .map(CandidateDto::from)
-                .collect(Collectors.toList());
+        return candidates.stream().map(CandidateDto::from).collect(Collectors.toList());
     }
+
+    // ── Mutations ─────────────────────────────────────────────────────────────
 
     @Transactional
     public CandidateDto createCandidate(CreateCandidateDto dto) {
-        // Validate email uniqueness
-        if (candidateRepository.existsByEmailAndIsActiveTrue(dto.email())) {
-            throw new IllegalArgumentException("Candidate with email " + dto.email() + " already exists");
+        // ── Global email uniqueness (includes soft-deleted rows) ──────────────
+        String normalizedEmail = dto.email().trim().toLowerCase();
+        if (candidateRepository.existsByEmail(normalizedEmail)) {
+            throw new IllegalArgumentException(
+                    "A candidate with email '" + dto.email() + "' already exists.");
         }
 
-        // Validate department
         Department department = null;
         if (dto.departmentId() != null) {
             department = departmentRepository.findById(dto.departmentId())
                     .orElseThrow(() -> new RuntimeException("Department not found"));
         }
 
-        // Validate designation
         Designation designation = null;
         if (dto.targetDesignationId() != null) {
             designation = designationRepository.findById(dto.targetDesignationId())
                     .orElseThrow(() -> new RuntimeException("Designation not found"));
 
-            // Verify designation belongs to the department
-            if (department != null && designation.getDepartment() != null &&
-                    !designation.getDepartment().getId().equals(department.getId())) {
+            if (department != null && designation.getDepartment() != null
+                    && !designation.getDepartment().getId().equals(department.getId())) {
                 throw new IllegalArgumentException(
                         "Designation does not belong to the selected department");
             }
-
-            // Auto-set department from designation if not provided
             if (department == null && designation.getDepartment() != null) {
                 department = designation.getDepartment();
             }
         }
 
         Candidate candidate = Candidate.builder()
-                .name(dto.name())
-                .email(dto.email())
+                .name(dto.name().trim())
+                .email(normalizedEmail)
                 .phone(dto.phone())
                 .department(department)
                 .targetDesignation(designation)
                 .status(CandidateStatus.APPLIED)
                 .resumeUrl(dto.resumeUrl())
+                .jdUrl(dto.jdUrl())
+                .jobReferenceCode(dto.jobReferenceCode())
+                .location(dto.location())
                 .notes(dto.notes())
                 .yearsOfExperience(dto.yearsOfExperience())
                 .isActive(true)
@@ -169,19 +153,30 @@ public class CandidateService {
                 .orElseThrow(() -> new RuntimeException("Candidate not found"));
 
         if (dto.name() != null) {
-            candidate.setName(dto.name());
+            candidate.setName(dto.name().trim());
         }
 
-        if (dto.email() != null && !dto.email().equals(candidate.getEmail())) {
-            if (candidateRepository.existsByEmailAndIsActiveTrueAndIdNot(dto.email(), id)) {
-                throw new IllegalArgumentException("Email already exists");
+        if (dto.email() != null) {
+            String normalizedEmail = dto.email().trim().toLowerCase();
+            if (!normalizedEmail.equals(candidate.getEmail())) {
+                // Global uniqueness: reject if another row (any active state) has this email
+                if (candidateRepository.existsByEmailIgnoreCaseAndIdNot(normalizedEmail, id)) {
+                    throw new IllegalArgumentException(
+                            "A candidate with email '" + dto.email() + "' already exists.");
+                }
+                candidate.setEmail(normalizedEmail);
             }
-            candidate.setEmail(dto.email());
         }
 
-        if (dto.phone() != null) {
-            candidate.setPhone(dto.phone());
-        }
+        if (dto.phone() != null)              candidate.setPhone(dto.phone());
+        if (dto.jdUrl() != null)              candidate.setJdUrl(dto.jdUrl());
+        if (dto.jobReferenceCode() != null)   candidate.setJobReferenceCode(dto.jobReferenceCode());
+        if (dto.location() != null)           candidate.setLocation(dto.location());
+        if (dto.notes() != null)              candidate.setNotes(dto.notes());
+        if (dto.yearsOfExperience() != null)  candidate.setYearsOfExperience(dto.yearsOfExperience());
+        if (dto.resumeUrl() != null)          candidate.setResumeUrl(dto.resumeUrl());
+        if (dto.status() != null)             candidate.setStatus(dto.status());
+        if (dto.isActive() != null)           candidate.setActive(dto.isActive());
 
         if (dto.departmentId() != null) {
             Department department = departmentRepository.findById(dto.departmentId())
@@ -193,34 +188,12 @@ public class CandidateService {
             Designation designation = designationRepository.findById(dto.targetDesignationId())
                     .orElseThrow(() -> new RuntimeException("Designation not found"));
 
-            // Verify designation belongs to department
-            if (candidate.getDepartment() != null && designation.getDepartment() != null &&
-                    !designation.getDepartment().getId().equals(candidate.getDepartment().getId())) {
+            if (candidate.getDepartment() != null && designation.getDepartment() != null
+                    && !designation.getDepartment().getId().equals(candidate.getDepartment().getId())) {
                 throw new IllegalArgumentException(
                         "Designation does not belong to the candidate's department");
             }
-
             candidate.setTargetDesignation(designation);
-        }
-
-        if (dto.status() != null) {
-            candidate.setStatus(dto.status());
-        }
-
-        if (dto.resumeUrl() != null) {
-            candidate.setResumeUrl(dto.resumeUrl());
-        }
-
-        if (dto.notes() != null) {
-            candidate.setNotes(dto.notes());
-        }
-
-        if (dto.yearsOfExperience() != null) {
-            candidate.setYearsOfExperience(dto.yearsOfExperience());
-        }
-
-        if (dto.isActive() != null) {
-            candidate.setActive(dto.isActive());
         }
 
         candidate = candidateRepository.save(candidate);
@@ -231,8 +204,6 @@ public class CandidateService {
     public void deleteCandidate(Long id) {
         Candidate candidate = candidateRepository.findByIdAndIsActiveTrue(id)
                 .orElseThrow(() -> new RuntimeException("Candidate not found"));
-
-        // Soft delete
         candidate.setActive(false);
         candidateRepository.save(candidate);
     }

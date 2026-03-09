@@ -4,7 +4,6 @@ import com.nemal.dto.AvailabilityFilterDto;
 import com.nemal.dto.InterviewerAvailabilityDto;
 import com.nemal.entity.AvailabilitySlot;
 import com.nemal.entity.Designation;
-import com.nemal.entity.InterviewerTechnology;
 import com.nemal.entity.Tier;
 import com.nemal.repository.AvailabilitySlotRepository;
 import jakarta.persistence.EntityManager;
@@ -27,10 +26,7 @@ public class HRAvailabilityService {
 
     /**
      * How far back (in days) the HR calendar shows past slots.
-     *
-     * Without a lookback the calendar goes empty the moment all current-week
-     * slots pass their start time. 30 days keeps recent booked/completed
-     * interviews visible so HR can audit what happened.
+     * 30 days keeps recent booked/completed interviews visible for audit.
      */
     private static final int HR_LOOKBACK_DAYS = 30;
 
@@ -43,31 +39,17 @@ public class HRAvailabilityService {
         this.availabilitySlotRepository = availabilitySlotRepository;
     }
 
-    /**
-     * Returns ALL active slots (AVAILABLE + BOOKED) so the HR calendar shows
-     * the full picture — available slots for scheduling and booked slots
-     * (greyed out / coloured differently) for awareness.
-     *
-     * Uses a 30-day lookback so data is never silently lost after slots expire.
-     */
     @Transactional
     public List<InterviewerAvailabilityDto> getAllAvailableSlots(AvailabilityFilterDto filter) {
         try {
-            List<AvailabilitySlot> slots;
-
-            // "from" is the lookback anchor — 30 days ago by default.
-            // When a date filter is applied, the filter's startDateTime acts as the
-            // lower bound so we don't need to double-apply the lookback there.
             LocalDateTime from = LocalDateTime.now().minusDays(HR_LOOKBACK_DAYS);
 
             logger.info("=== HR AVAILABILITY FILTER REQUEST ===");
             logger.info("Filter: {}, lookback from: {}", filter, from);
 
-            if (filter == null) {
-                slots = availabilitySlotRepository.findAllActiveSlotsForHR(from);
-            } else {
-                slots = filterSlots(filter, from);
-            }
+            List<AvailabilitySlot> slots = (filter == null)
+                    ? availabilitySlotRepository.findAllActiveSlotsForHR(from)
+                    : filterSlots(filter, from);
 
             logger.info("Total slots (available + booked): {}", slots.size());
 
@@ -76,11 +58,9 @@ public class HRAvailabilityService {
                 try {
                     result.add(InterviewerAvailabilityDto.from(slot));
                 } catch (Exception e) {
-                    logger.error("Error converting slot {} to DTO: {}",
-                            slot.getId(), e.getMessage(), e);
+                    logger.error("Error converting slot {} to DTO: {}", slot.getId(), e.getMessage(), e);
                 }
             }
-
             return result;
 
         } catch (Exception e) {
@@ -93,22 +73,18 @@ public class HRAvailabilityService {
         List<AvailabilitySlot> slots;
 
         try {
-            // ── Step 1: date range ─────────────────────────────────────────────
-            // If the HR user has set an explicit date range, honour it exactly.
-            // If no date range is set, fall back to the 30-day lookback window
-            // so the calendar always has data.
+            // ── Step 1: date range ────────────────────────────────────────────
             if (filter.startDateTime() != null && filter.endDateTime() != null) {
                 logger.info("Filtering by explicit date range: {} to {}",
                         filter.startDateTime(), filter.endDateTime());
                 slots = availabilitySlotRepository.findAllActiveSlotsForHRByDateRange(
                         filter.startDateTime(), filter.endDateTime());
             } else {
-                // No date filter — use lookback so data never vanishes
                 slots = availabilitySlotRepository.findAllActiveSlotsForHR(from);
             }
             logger.info("Step 1 – initial slots: {}", slots.size());
 
-            // ── Step 2: department ─────────────────────────────────────────────
+            // ── Step 2: department ────────────────────────────────────────────
             if (filter.departmentIds() != null && !filter.departmentIds().isEmpty()) {
                 slots = slots.stream()
                         .filter(slot -> {
@@ -122,24 +98,23 @@ public class HRAvailabilityService {
                 logger.info("Step 2 – after department filter: {}", slots.size());
             }
 
-            // ── Step 3: technology ─────────────────────────────────────────────
-            // Only filters AVAILABLE slots — BOOKED slots are kept as-is so HR
-            // can see who is busy even if the tech doesn't match the filter.
+            // ── Step 3: technology ────────────────────────────────────────────
+            // AVAILABLE slots filtered by interviewer's active technologies.
+            // BOOKED slots always pass — HR must see who is busy even if tech
+            // doesn't match the current filter.
             if (filter.technologyIds() != null && !filter.technologyIds().isEmpty()) {
                 slots = slots.stream()
                         .filter(slot -> {
-                            // Always keep BOOKED slots so the "busy" picture is accurate
                             if ("BOOKED".equals(slot.getStatus().name())) return true;
-
                             if (slot.getInterviewer() == null) return false;
 
-                            var interviewerTechs = slot.getInterviewer().getInterviewerTechnologies();
-                            if (!Hibernate.isInitialized(interviewerTechs)) {
-                                Hibernate.initialize(interviewerTechs);
+                            var techs = slot.getInterviewer().getInterviewerTechnologies();
+                            if (!Hibernate.isInitialized(techs)) {
+                                Hibernate.initialize(techs);
                             }
-                            if (interviewerTechs == null || interviewerTechs.isEmpty()) return false;
+                            if (techs == null || techs.isEmpty()) return false;
 
-                            return interviewerTechs.stream()
+                            return techs.stream()
                                     .filter(it -> it != null
                                             && it.isActive()
                                             && it.getTechnology() != null)
@@ -150,7 +125,7 @@ public class HRAvailabilityService {
                 logger.info("Step 3 – after technology filter: {}", slots.size());
             }
 
-            // ── Step 4: years of experience ────────────────────────────────────
+            // ── Step 4: years of experience ───────────────────────────────────
             if (filter.minYearsOfExperience() != null) {
                 slots = slots.stream()
                         .filter(slot -> {
@@ -163,15 +138,30 @@ public class HRAvailabilityService {
                 logger.info("Step 4 – after experience filter: {}", slots.size());
             }
 
-            // ── Step 5: tier / level hierarchy ─────────────────────────────────
+            // ── Step 5: tier / level hierarchy ────────────────────────────────
+            //
+            // Business rule (Tier 1 = highest, Level 1 = highest within a tier):
+            //   Interviewer may interview candidate if:
+            //     (a) ivTierOrder  <  candidateTierOrder   → strictly higher tier, OR
+            //     (b) ivTierOrder == candidateTierOrder
+            //           AND ivLevelOrder < candidateLevelOrder → strictly higher level
+            //
+            //   Same tier + same level is NOT allowed (strict less-than, not <=).
+            //
+            // The filter sends:
+            //   minTierId    = candidate's tierOrder  (the candidate's own tier order value)
+            //   minDesignationLevelInDepartment = candidate's levelOrder
+            //   departmentIdForDesignationFilter = candidate's departmentId
+            //
             if (filter.minTierId() != null && filter.departmentIdForDesignationFilter() != null) {
-                final int minTierOrder = filter.minTierId().intValue();
-                final int minLevelOrder = filter.minDesignationLevelInDepartment() != null
+                final int candidateTierOrder  = filter.minTierId().intValue();
+                final int candidateLevelOrder = filter.minDesignationLevelInDepartment() != null
                         ? filter.minDesignationLevelInDepartment().intValue()
                         : Integer.MAX_VALUE;
 
                 List<AvailabilitySlot> passedSlots = new ArrayList<>();
                 for (AvailabilitySlot slot : slots) {
+                    // Always keep booked slots
                     if ("BOOKED".equals(slot.getStatus().name())) {
                         passedSlots.add(slot);
                         continue;
@@ -181,26 +171,29 @@ public class HRAvailabilityService {
                                 || slot.getInterviewer().getCurrentDesignation() == null)
                             continue;
 
+                        // Tier filter is department-scoped
                         if (slot.getInterviewer().getDepartment() == null
                                 || !slot.getInterviewer().getDepartment().getId()
                                 .equals(filter.departmentIdForDesignationFilter()))
                             continue;
 
-                        Designation designation =
-                                slot.getInterviewer().getCurrentDesignation();
+                        Designation designation = slot.getInterviewer().getCurrentDesignation();
                         Tier tier = designation.getTier();
+
                         if (tier == null
                                 || tier.getTierOrder() == null
                                 || designation.getLevelOrder() == null)
                             continue;
 
-                        int intTier = tier.getTierOrder();
-                        int intLevel = designation.getLevelOrder();
+                        int ivTier  = tier.getTierOrder();
+                        int ivLevel = designation.getLevelOrder();
 
-                        boolean passes = intTier < minTierOrder
-                                || (intTier == minTierOrder && intLevel <= minLevelOrder);
+                        // Rule: strictly higher tier  OR  same tier + strictly higher level
+                        boolean passes = ivTier < candidateTierOrder
+                                || (ivTier == candidateTierOrder && ivLevel < candidateLevelOrder);
 
                         if (passes) passedSlots.add(slot);
+
                     } catch (Exception e) {
                         logger.error("Error checking tier for slot {}: {}",
                                 slot.getId(), e.getMessage());
@@ -212,7 +205,8 @@ public class HRAvailabilityService {
             } else if (filter.minDesignationLevelInDepartment() != null
                     && filter.departmentIdForDesignationFilter() != null) {
 
-                final int minLevel = filter.minDesignationLevelInDepartment().intValue();
+                // Level-only branch (no tier filter specified)
+                final int candidateLevelOrder = filter.minDesignationLevelInDepartment().intValue();
                 slots = slots.stream()
                         .filter(slot -> {
                             if ("BOOKED".equals(slot.getStatus().name())) return true;
@@ -223,12 +217,13 @@ public class HRAvailabilityService {
                                     || !slot.getInterviewer().getDepartment().getId()
                                     .equals(filter.departmentIdForDesignationFilter()))
                                 return false;
-                            Integer level =
+                            Integer ivLevel =
                                     slot.getInterviewer().getCurrentDesignation().getLevelOrder();
-                            return level != null && level <= minLevel;
+                            // Strictly higher level (lower number = higher seniority)
+                            return ivLevel != null && ivLevel < candidateLevelOrder;
                         })
                         .collect(Collectors.toList());
-                logger.info("Step 5 – after level filter: {}", slots.size());
+                logger.info("Step 5 – after level-only filter: {}", slots.size());
             }
 
             return slots;

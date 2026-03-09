@@ -1,6 +1,5 @@
 package com.nemal.dto;
 
-// CreateCandidateDto.java
 public record CreateCandidateDto(
         String name,
         String email,
@@ -8,6 +7,9 @@ public record CreateCandidateDto(
         Long departmentId,
         Long targetDesignationId,
         String resumeUrl,
+        String jdUrl,
+        String jobReferenceCode,
+        String location,
         String notes,
         Integer yearsOfExperience
 ) {}

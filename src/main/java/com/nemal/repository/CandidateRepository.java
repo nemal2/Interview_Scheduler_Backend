@@ -13,29 +13,46 @@ import java.util.Optional;
 @Repository
 public interface CandidateRepository extends JpaRepository<Candidate, Long> {
 
-    // Find all active candidates
+    // ── List queries ─────────────────────────────────────────────────────────
+
     List<Candidate> findByIsActiveTrueOrderByAppliedAtDesc();
 
-    // Find by department
     List<Candidate> findByDepartmentIdAndIsActiveTrueOrderByAppliedAtDesc(Long departmentId);
 
-    // Find by status
     List<Candidate> findByStatusAndIsActiveTrueOrderByAppliedAtDesc(CandidateStatus status);
 
-    // Find by department and status
     List<Candidate> findByDepartmentIdAndStatusAndIsActiveTrueOrderByAppliedAtDesc(
             Long departmentId, CandidateStatus status);
 
-    // Check if email exists (for active candidates)
+    // ── Email uniqueness — GLOBAL (active + soft-deleted) ───────────────────
+
+    /**
+     * Used on CREATE: rejects even emails from soft-deleted candidates so we
+     * can safely restore them later without a collision.
+     */
+    boolean existsByEmail(String email);
+
+    /**
+     * Used on UPDATE: rejects emails that belong to *another* candidate
+     * (active or inactive). Case-insensitive comparison.
+     */
+    @Query("SELECT CASE WHEN COUNT(c) > 0 THEN true ELSE false END " +
+            "FROM Candidate c WHERE LOWER(c.email) = LOWER(:email) AND c.id <> :id")
+    boolean existsByEmailIgnoreCaseAndIdNot(
+            @Param("email") String email,
+            @Param("id")    Long id);
+
+    // ── Legacy — kept for backward compat, not used in updated service ───────
+
     boolean existsByEmailAndIsActiveTrue(String email);
 
-    // Check if email exists excluding a specific candidate (for updates)
     boolean existsByEmailAndIsActiveTrueAndIdNot(String email, Long id);
 
-    // Search candidates by name or email
+    // ── Search ────────────────────────────────────────────────────────────────
+
     @Query("SELECT c FROM Candidate c WHERE c.isActive = true AND " +
-            "(LOWER(c.name) LIKE LOWER(CONCAT('%', :searchTerm, '%')) OR " +
-            "LOWER(c.email) LIKE LOWER(CONCAT('%', :searchTerm, '%'))) " +
+            "(LOWER(c.name)  LIKE LOWER(CONCAT('%', :searchTerm, '%')) OR " +
+            " LOWER(c.email) LIKE LOWER(CONCAT('%', :searchTerm, '%'))) " +
             "ORDER BY c.appliedAt DESC")
     List<Candidate> searchCandidates(@Param("searchTerm") String searchTerm);
 

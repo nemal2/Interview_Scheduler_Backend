@@ -10,6 +10,9 @@ public record UpdateCandidateDto(
         Long targetDesignationId,
         CandidateStatus status,
         String resumeUrl,
+        String jdUrl,
+        String jobReferenceCode,
+        String location,
         String notes,
         Integer yearsOfExperience,
         Boolean isActive

@@ -5,7 +5,6 @@ import com.nemal.enums.CandidateStatus;
 
 import java.time.LocalDateTime;
 
-// CandidateDto.java
 public record CandidateDto(
         Long id,
         String name,
@@ -15,10 +14,16 @@ public record CandidateDto(
         String departmentName,
         Long targetDesignationId,
         String targetDesignationName,
+        // Tier info derived from the target designation
+        Long tierId,
         String tierName,
+        Integer tierOrder,
         Integer levelOrder,
         CandidateStatus status,
         String resumeUrl,
+        String jdUrl,
+        String jobReferenceCode,
+        String location,
         String notes,
         Integer yearsOfExperience,
         LocalDateTime appliedAt,
@@ -27,6 +32,9 @@ public record CandidateDto(
         boolean isActive
 ) {
     public static CandidateDto from(Candidate candidate) {
+        var desig = candidate.getTargetDesignation();
+        var tier  = (desig != null) ? desig.getTier() : null;
+
         return new CandidateDto(
                 candidate.getId(),
                 candidate.getName(),
@@ -34,13 +42,17 @@ public record CandidateDto(
                 candidate.getPhone(),
                 candidate.getDepartment() != null ? candidate.getDepartment().getId() : null,
                 candidate.getDepartment() != null ? candidate.getDepartment().getName() : null,
-                candidate.getTargetDesignation() != null ? candidate.getTargetDesignation().getId() : null,
-                candidate.getTargetDesignation() != null ? candidate.getTargetDesignation().getName() : null,
-                candidate.getTargetDesignation() != null && candidate.getTargetDesignation().getTier() != null
-                        ? candidate.getTargetDesignation().getTier().getName() : null,
-                candidate.getTargetDesignation() != null ? candidate.getTargetDesignation().getLevelOrder() : null,
+                desig != null ? desig.getId() : null,
+                desig != null ? desig.getName() : null,
+                tier  != null ? tier.getId()        : null,
+                tier  != null ? tier.getName()       : null,
+                tier  != null ? tier.getTierOrder()  : null,
+                desig != null ? desig.getLevelOrder() : null,
                 candidate.getStatus(),
                 candidate.getResumeUrl(),
+                candidate.getJdUrl(),
+                candidate.getJobReferenceCode(),
+                candidate.getLocation(),
                 candidate.getNotes(),
                 candidate.getYearsOfExperience(),
                 candidate.getAppliedAt(),
